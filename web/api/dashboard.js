@@ -377,11 +377,11 @@ module.exports = async function handler(req, res) {
         client,
         `
         SELECT
-          l.provider_code,
+          r.provider_code,
           r.display_name_cn,
           r.provider_type,
           r.billing_unit,
-          count(*)::int AS calls_total,
+          count(l.api_call_id)::int AS calls_total,
           count(*) FILTER (WHERE l.status = 'success')::int AS calls_success,
           count(*) FILTER (WHERE l.status <> 'success')::int AS calls_failed,
           count(DISTINCT l.note_id) FILTER (WHERE l.note_id IS NOT NULL)::int AS notes_total,
@@ -390,10 +390,20 @@ module.exports = async function handler(req, res) {
           COALESCE(sum(l.total_tokens), 0)::bigint AS total_tokens,
           round(avg(l.latency_ms)::numeric, 1)::float AS avg_latency_ms,
           max(l.started_at) AS latest_started_at
-        FROM public.geo_ops_api_call_logs l
-        JOIN public.geo_ops_api_registry r ON r.provider_code = l.provider_code
-        GROUP BY l.provider_code, r.display_name_cn, r.provider_type, r.billing_unit
-        ORDER BY calls_total DESC, l.provider_code
+        FROM public.geo_ops_api_registry r
+        LEFT JOIN public.geo_ops_api_call_logs l ON l.provider_code = r.provider_code
+        GROUP BY r.provider_code, r.display_name_cn, r.provider_type, r.billing_unit
+        ORDER BY
+          CASE r.provider_code
+            WHEN 'endata_xhs_note_detail' THEN 1
+            WHEN 'volcengine_ark_vision' THEN 2
+            WHEN 'volcengine_ark_chat' THEN 3
+            WHEN 'kimi_chat' THEN 4
+            WHEN 'volcengine_ark_embedding' THEN 5
+            ELSE 20
+          END,
+          calls_total DESC,
+          r.provider_code
         `,
       ),
       query(

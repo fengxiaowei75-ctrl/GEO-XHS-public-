@@ -52,6 +52,11 @@ const providerLabels = {
   volcengine_ark_embedding: "豆包 Embedding（内容资产转向量）",
   kimi_chat: "Kimi 历史内容资产总结（旧模型记录）",
 };
+const providerChartOrder = new Map(
+  ["endata_xhs_note_detail", "volcengine_ark_vision", "volcengine_ark_chat", "kimi_chat", "volcengine_ark_embedding"].map(
+    (code, index) => [code, index],
+  ),
+);
 
 function formatNumber(value) {
   if (value === null || value === undefined || value === "") return "-";
@@ -131,6 +136,21 @@ function providerTypeLabel(value) {
 function providerDisplayName(item) {
   const code = typeof item === "string" ? item : item?.provider_code;
   return providerLabels[code] || (typeof item === "string" ? item : item?.display_name_cn) || code || "-";
+}
+
+function compactProviderLabel(value) {
+  return String(value || "")
+    .replace(/（.*?）/g, "")
+    .replace(/^火山\s*Ark\s*/, "")
+    .replace(/^Ark\s*/, "")
+    .trim();
+}
+
+function chartLabelLines(value) {
+  const label = compactProviderLabel(value);
+  if (label.length <= 8) return [label];
+  if (label.length <= 14) return [label.slice(0, 7), label.slice(7)];
+  return [label.slice(0, 7), `${label.slice(7, 13)}...`];
 }
 
 function modelDisplayName(item) {
@@ -488,24 +508,29 @@ function ApiStatusComboChart({ rows, selectedProvider, selectedStatus, onSelect 
     const chartRows = rows
       .map((item) => {
         const label = providerDisplayName(item);
-        const cleanLabel = label.replace(/（.*?）/g, "").replace("火山 Ark", "火山").trim();
         return {
           ...item,
           label,
-          shortLabel: cleanLabel.length > 13 ? `${cleanLabel.slice(0, 13)}...` : cleanLabel,
+          labelLines: chartLabelLines(label),
           calls_success: Number(item.calls_success || 0),
           calls_failed: Number(item.calls_failed || 0),
           calls_total: Number(item.calls_total || 0),
           total_tokens: Number(item.total_tokens || 0),
         };
       })
-      .filter((item) => item.provider_code);
+      .filter((item) => item.provider_code)
+      .sort((a, b) => {
+        const orderA = providerChartOrder.has(a.provider_code) ? providerChartOrder.get(a.provider_code) : 99;
+        const orderB = providerChartOrder.has(b.provider_code) ? providerChartOrder.get(b.provider_code) : 99;
+        if (orderA !== orderB) return orderA - orderB;
+        return b.calls_total - a.calls_total || a.provider_code.localeCompare(b.provider_code);
+      });
     const width = 900;
-    const height = 360;
+    const height = 320;
     const padLeft = 62;
     const padRight = 88;
-    const padTop = 28;
-    const padBottom = 92;
+    const padTop = 24;
+    const padBottom = 58;
     const innerW = width - padLeft - padRight;
     const innerH = height - padTop - padBottom;
     const maxCalls = Math.max(1, ...chartRows.map((item) => item.calls_total));
@@ -519,8 +544,13 @@ function ApiStatusComboChart({ rows, selectedProvider, selectedStatus, onSelect 
     const yToken = (value) => baseY - (Number(value || 0) / maxTokens) * innerH;
     const positionedRows = chartRows.map((row, index) => {
       const x = padLeft + slotW * index + slotW / 2;
-      const successH = baseY - yCall(row.calls_success);
-      const failedH = baseY - yCall(row.calls_failed);
+      let successH = row.calls_success > 0 ? Math.max(5, baseY - yCall(row.calls_success)) : 0;
+      let failedH = row.calls_failed > 0 ? Math.max(5, baseY - yCall(row.calls_failed)) : 0;
+      const overflow = Math.max(0, successH + failedH - innerH);
+      if (overflow > 0) {
+        if (successH >= failedH) successH = Math.max(0, successH - overflow);
+        else failedH = Math.max(0, failedH - overflow);
+      }
       const successY = baseY - successH;
       const failedY = successY - failedH;
       return { ...row, x, successH, failedH, successY, failedY, tokenY: yToken(row.total_tokens) };
@@ -654,15 +684,17 @@ function ApiStatusComboChart({ rows, selectedProvider, selectedStatus, onSelect 
                   {formatCompact(row.calls_failed)}
                 </text>
               ) : null}
-              <text x={row.x} y={prepared.height - 58} textAnchor="middle" className="chart-label combo-x-label">
-                {row.shortLabel}
-              </text>
-              <text x={row.x} y={prepared.height - 39} textAnchor="middle" className="chart-label combo-success-label">
-                成{formatCompact(row.calls_success)}
-              </text>
-              <text x={row.x} y={prepared.height - 22} textAnchor="middle" className="chart-label combo-failed-label">
-                败{formatCompact(row.calls_failed)}
-              </text>
+              {row.labelLines.map((line, lineIndex) => (
+                <text
+                  key={`${row.provider_code}-label-${lineIndex}`}
+                  x={row.x}
+                  y={prepared.height - 35 + lineIndex * 13}
+                  textAnchor="middle"
+                  className="chart-label combo-x-label"
+                >
+                  {line}
+                </text>
+              ))}
             </g>
           );
         })}
@@ -696,6 +728,8 @@ function ApiStatusComboChart({ rows, selectedProvider, selectedStatus, onSelect 
             <b>{formatCompact(hovered.total_tokens)}</b>
             <span>涉及笔记</span>
             <b>{formatNumber(hovered.notes_total)}</b>
+            <span>类型</span>
+            <b>{providerTypeLabel(hovered.provider_type)}</b>
           </div>
         </div>
       ) : null}
@@ -1104,7 +1138,7 @@ function OpsDashboard({ data }) {
       <TimeWindowSlider days={visibleDays} onChange={setVisibleDays} startDate={windowStart} endDate={windowEnd} />
 
       <section className="ops-grid ops-grid-uneven">
-        <section className="panel">
+        <section className="panel ops-equal-panel api-overview-panel">
           <SectionHeader icon={Activity} title="API 调用概况" />
           <ApiStatusComboChart
             rows={apiRows}
@@ -1114,7 +1148,7 @@ function OpsDashboard({ data }) {
           />
         </section>
 
-        <section className="panel">
+        <section className="panel ops-equal-panel script-status-panel">
           <SectionHeader icon={ListChecks} title="脚本运行状态" />
           <div className="script-grid">
             {(ops.scriptRunSummary || []).map((item) => (
