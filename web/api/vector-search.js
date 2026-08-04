@@ -113,7 +113,10 @@ module.exports = async function handler(req, res) {
     }
 
     const embeddingData = await embeddingRes.json();
-    const queryVector = embeddingData?.data?.[0]?.embedding;
+    const embeddingPayload = embeddingData?.data;
+    const queryVector = Array.isArray(embeddingPayload)
+      ? embeddingPayload[0]?.embedding
+      : embeddingPayload?.embedding;
 
     if (!Array.isArray(queryVector) || !queryVector.length) {
       sendJson(res, 500, { success: false, error: "Embedding API 未返回有效向量" });
