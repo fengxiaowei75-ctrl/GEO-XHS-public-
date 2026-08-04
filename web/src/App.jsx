@@ -365,6 +365,21 @@ function localDateInputValue(value) {
   return `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`;
 }
 
+function todayInputValue() {
+  return localDateInputValue(new Date());
+}
+
+function rangeForLastDays(days, endValue = "") {
+  const end = endValue ? new Date(`${endValue}T00:00:00`) : new Date();
+  if (Number.isNaN(end.getTime())) return { start: "", end: "" };
+  const start = new Date(end);
+  start.setDate(start.getDate() - Math.max(1, Number(days || 1)) + 1);
+  return {
+    start: localDateInputValue(start),
+    end: localDateInputValue(end),
+  };
+}
+
 function normalizeBucketStart(value, range) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -1144,7 +1159,7 @@ function InsightNoteTable({ rows, compact = false }) {
             <th>笔记</th>
             <th>主题类型</th>
             <th>目标人群</th>
-            <th>互动数据</th>
+            <th>点赞/收藏/评论</th>
             <th>情绪钩子</th>
             {!compact ? <th>业务逻辑</th> : null}
           </tr>
@@ -1167,10 +1182,18 @@ function InsightNoteTable({ rows, compact = false }) {
               </td>
               <td>
                 <div className="insight-metrics-mini">
-                  <strong>{formatNumber(item.interaction_score)}</strong>
-                  <span>赞 {formatNumber(item.like_count)}</span>
-                  <span>藏 {formatNumber(item.collected_count)}</span>
-                  <span>评 {formatNumber(item.comments_count)}</span>
+                  <span>
+                    <em>赞</em>
+                    <strong>{formatNumber(item.like_count)}</strong>
+                  </span>
+                  <span>
+                    <em>藏</em>
+                    <strong>{formatNumber(item.collected_count)}</strong>
+                  </span>
+                  <span>
+                    <em>评</em>
+                    <strong>{formatNumber(item.comments_count)}</strong>
+                  </span>
                 </div>
               </td>
               <td>
@@ -1298,14 +1321,240 @@ function PersonaPieChart({ rows, selectedPersona, onSelect }) {
   );
 }
 
-function ContentDashboard({ data, loading, filter, contentStart, contentEnd, onContentRangeChange }) {
+const contentMetricCards = [
+  { key: "note_count", overviewKey: "noteTotal", label: "笔记总数", icon: FileText, tone: "blue", sub: "当前周期" },
+  { key: "like_total", overviewKey: "likeTotal", label: "笔记点赞", icon: Heart, tone: "purple", sub: "近30天趋势" },
+  { key: "collected_total", overviewKey: "collectedTotal", label: "笔记收藏", icon: Bookmark, tone: "amber", sub: "近30天趋势" },
+  { key: "comments_total", overviewKey: "commentsTotal", label: "笔记评论", icon: MessageCircle, tone: "teal", sub: "近30天趋势" },
+];
+
+function MiniSparkline({ rows, valueKey, color = "var(--blue)" }) {
+  const [hoverIndex, setHoverIndex] = useState(null);
+  const points = useMemo(() => {
+    const values = rows.map((item) => Number(item[valueKey] || 0));
+    const max = Math.max(1, ...values);
+    return values.map((value, index) => {
+      const x = rows.length <= 1 ? 80 : (index / (rows.length - 1)) * 160;
+      const y = 44 - (value / max) * 36;
+      return { x, y, value, date: rows[index]?.bucket_date || rows[index]?.bucket_start };
+    });
+  }, [rows, valueKey]);
+
+  if (!points.length) return <div className="mini-sparkline-empty">暂无近30天数据</div>;
+
+  const line = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(" ");
+  const hovered = hoverIndex !== null ? points[hoverIndex] : null;
+
+  function handleMove(event) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    setHoverIndex(Math.round(ratio * (points.length - 1)));
+  }
+
+  return (
+    <div className="mini-sparkline">
+      <svg viewBox="0 0 160 48" onMouseMove={handleMove} onMouseLeave={() => setHoverIndex(null)} role="img" aria-label="近30天趋势">
+        <path d={line} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+        {hovered ? (
+          <>
+            <line x1={hovered.x} x2={hovered.x} y1="4" y2="46" className="mini-sparkline-hover-line" />
+            <circle cx={hovered.x} cy={hovered.y} r="4" fill={color} className="mini-sparkline-dot" />
+          </>
+        ) : null}
+      </svg>
+      {hovered ? (
+        <div className="mini-sparkline-tooltip" style={{ left: `${(hovered.x / 160) * 100}%` }}>
+          <strong>{formatNumber(hovered.value)}</strong>
+          <span>{formatShortDate(hovered.date)}</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function InsightMetricCard({ icon: Icon, label, value, sub, tone, sparkRows, sparkKey }) {
+  const colorByTone = {
+    blue: "var(--blue)",
+    teal: "var(--teal)",
+    purple: "var(--purple)",
+    amber: "var(--amber)",
+  };
+
+  return (
+    <section className={`stat insight-metric-card stat-${tone || "blue"}`}>
+      <div className="stat-icon" aria-hidden="true">
+        <Icon size={18} />
+      </div>
+      <div className="insight-metric-body">
+        <div className="stat-label">{label}</div>
+        <div className="stat-value">{value}</div>
+        <div className="stat-sub">{sub}</div>
+        <MiniSparkline rows={sparkRows || []} valueKey={sparkKey} color={colorByTone[tone] || "var(--blue)"} />
+      </div>
+    </section>
+  );
+}
+
+function ContentTrendChart({ rows }) {
+  const [hoverIndex, setHoverIndex] = useState(null);
+  const prepared = useMemo(() => {
+    const width = 920;
+    const height = 330;
+    const padLeft = 64;
+    const padRight = 56;
+    const padTop = 30;
+    const padBottom = 56;
+    const innerW = width - padLeft - padRight;
+    const innerH = height - padTop - padBottom;
+    const metricKeys = ["like_total", "collected_total", "comments_total"];
+    const maxMetric = Math.max(1, ...rows.flatMap((row) => metricKeys.map((key) => Number(row[key] || 0))));
+    const maxCount = Math.max(1, ...rows.map((row) => Number(row.note_count || 0)));
+    const xFor = (index) => padLeft + (rows.length <= 1 ? innerW / 2 : (index / (rows.length - 1)) * innerW);
+    const yMetric = (value) => padTop + innerH - (Number(value || 0) / maxMetric) * innerH;
+    const yCount = (value) => padTop + innerH - (Number(value || 0) / maxCount) * innerH;
+    const barWidth = Math.max(2, Math.min(28, innerW / Math.max(1, rows.length) / 2.2));
+    const points = rows.map((row, index) => ({
+      ...row,
+      x: xFor(index),
+      countY: yCount(row.note_count),
+      barHeight: padTop + innerH - yCount(row.note_count),
+    }));
+    const series = [
+      { key: "like_total", label: "点赞数", color: "#18aee8" },
+      { key: "collected_total", label: "收藏数", color: "#6fdc72" },
+      { key: "comments_total", label: "评论数", color: "#ff5f7f" },
+    ].map((item) => ({
+      ...item,
+      d: points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(1)} ${yMetric(point[item.key]).toFixed(1)}`).join(" "),
+    }));
+    const metricTicks = [0, maxMetric * 0.5, maxMetric].map((value) => Math.round(value));
+    const countTicks = [0, maxCount * 0.5, maxCount].map((value) => Math.round(value));
+    return { width, height, padLeft, padRight, padTop, padBottom, innerW, innerH, points, series, metricTicks, countTicks, yMetric, yCount, barWidth };
+  }, [rows]);
+
+  if (!rows.length) return <div className="empty-state">暂无趋势数据</div>;
+
+  const hovered = hoverIndex !== null ? prepared.points[hoverIndex] : null;
+  const visibleLabelStep = Math.max(1, Math.ceil(prepared.points.length / 8));
+  const tooltipLeft = hovered ? Math.min(82, Math.max(18, (hovered.x / prepared.width) * 100)) : 50;
+
+  function handleMove(event) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    setHoverIndex(Math.round(ratio * (prepared.points.length - 1)));
+  }
+
+  return (
+    <div className="content-trend-chart">
+      <div className="content-trend-summary">
+        当前周期共有 <strong>{formatNumber(rows.reduce((sum, item) => sum + Number(item.note_count || 0), 0))}</strong> 篇笔记
+      </div>
+      <svg viewBox={`0 0 ${prepared.width} ${prepared.height}`} onMouseMove={handleMove} onMouseLeave={() => setHoverIndex(null)} role="img" aria-label="笔记数据表现分布">
+        <title>笔记数据表现分布：曲线为点赞、收藏、评论，柱状为笔记篇数</title>
+        {prepared.metricTicks.map((tick) => {
+          const y = prepared.yMetric(tick);
+          return (
+            <g key={`metric-${tick}`}>
+              <line x1={prepared.padLeft} x2={prepared.width - prepared.padRight} y1={y} y2={y} className={tick === 0 ? "chart-axis" : "chart-grid"} />
+              <text x={prepared.padLeft - 10} y={y + 4} textAnchor="end" className="chart-label">
+                {formatCompact(tick)}
+              </text>
+            </g>
+          );
+        })}
+        {prepared.countTicks.map((tick) => {
+          const y = prepared.yCount(tick);
+          return (
+            <text key={`count-${tick}`} x={prepared.width - prepared.padRight + 10} y={y + 4} className="chart-label">
+              {formatCompact(tick)}
+            </text>
+          );
+        })}
+        {prepared.points.map((point, index) => (
+          <rect
+            key={`bar-${point.bucket_date}-${index}`}
+            x={point.x - prepared.barWidth / 2}
+            y={point.countY}
+            width={prepared.barWidth}
+            height={Math.max(1, point.barHeight)}
+            rx="5"
+            className="content-trend-bar"
+          />
+        ))}
+        {prepared.series.map((series) => (
+          <path key={series.key} d={series.d} fill="none" stroke={series.color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+        ))}
+        {hovered ? (
+          <line x1={hovered.x} x2={hovered.x} y1={prepared.padTop} y2={prepared.height - prepared.padBottom} className="chart-hover-line" />
+        ) : null}
+        {prepared.points.map((point, index) =>
+          index % visibleLabelStep === 0 || index === prepared.points.length - 1 ? (
+            <text key={`label-${point.bucket_date}-${index}`} x={point.x} y={prepared.height - 22} textAnchor="middle" className="chart-label chart-x-label">
+              {formatShortDate(point.bucket_date)}
+            </text>
+          ) : null,
+        )}
+        <text x={prepared.padLeft} y={15} className="chart-axis-title">
+          左轴：点赞/收藏/评论
+        </text>
+        <text x={prepared.width - prepared.padRight} y={15} textAnchor="end" className="chart-axis-title">
+          右轴：笔记篇数
+        </text>
+      </svg>
+      {hovered ? (
+        <div className="content-trend-tooltip" style={{ left: `${tooltipLeft}%` }}>
+          <strong>{formatShortDate(hovered.bucket_date)}</strong>
+          <div>
+            <span>笔记篇数</span>
+            <b>{formatNumber(hovered.note_count)}</b>
+            <span>点赞数</span>
+            <b>{formatNumber(hovered.like_total)}</b>
+            <span>收藏数</span>
+            <b>{formatNumber(hovered.collected_total)}</b>
+            <span>评论数</span>
+            <b>{formatNumber(hovered.comments_total)}</b>
+          </div>
+        </div>
+      ) : null}
+      <div className="content-trend-legend">
+        <span>
+          <i className="legend-note-count" />
+          笔记篇数
+        </span>
+        <span>
+          <i style={{ background: "#18aee8" }} />
+          点赞数
+        </span>
+        <span>
+          <i style={{ background: "#6fdc72" }} />
+          收藏数
+        </span>
+        <span>
+          <i style={{ background: "#ff5f7f" }} />
+          评论数
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function ContentDashboard({ data, loading, filter, contentStart, contentEnd, onContentRangeApply }) {
   const [selectedPersona, setSelectedPersona] = useState("");
+  const [draftStart, setDraftStart] = useState(contentStart || "");
+  const [draftEnd, setDraftEnd] = useState(contentEnd || "");
   const insight = data?.contentInsight || {};
   const overview = insight.overview || {};
   const topicRows = insight.topicFrequency || [];
   const personaRows = insight.personaDistribution || [];
   const noteRows = insight.noteAnalysis || [];
+  const trendRows = insight.trendDaily || [];
+  const sparkRows = insight.sparklineDaily || [];
   const keyword = filter.trim().toLowerCase();
+
+  useEffect(() => {
+    setDraftStart(contentStart || "");
+    setDraftEnd(contentEnd || "");
+  }, [contentStart, contentEnd]);
 
   useEffect(() => {
     if (!selectedPersona) return;
@@ -1326,71 +1575,130 @@ function ContentDashboard({ data, loading, filter, contentStart, contentEnd, onC
   const rangeMeta = overview.minCapturedAt
     ? `${formatShortDate(overview.minCapturedAt)} - ${formatShortDate(overview.maxCapturedAt)}`
     : "无数据";
+  const activeRangeLabel =
+    contentStart || contentEnd ? `${contentStart || "最早"} - ${contentEnd || "今天"}` : "累计";
+
+  function applyQuickRange(days) {
+    const maxCapturedDate = /^\d{4}-\d{2}-\d{2}/.test(String(overview.maxCapturedAt || "")) ? String(overview.maxCapturedAt).slice(0, 10) : "";
+    const end = maxCapturedDate || draftEnd || todayInputValue();
+    const next = rangeForLastDays(days, end);
+    setDraftStart(next.start);
+    setDraftEnd(next.end);
+  }
 
   return (
     <>
-      <section className="panel content-range-panel">
-        <SectionHeader
-          icon={Filter}
-          title="周期筛选"
-          action={
-            <button className="copy-button" onClick={() => onContentRangeChange({ start: "", end: "" })} type="button">
+      <section className="content-section">
+        <div className="content-section-heading">
+          <div>
+            <div className="eyebrow">
+              <BarChart3 size={15} />
+              Note Data
+            </div>
+            <h2>笔记数据概览</h2>
+          </div>
+          <StatusPill tone="neutral">当前筛选 {activeRangeLabel}</StatusPill>
+        </div>
+
+        <section className="panel content-range-panel">
+          <SectionHeader icon={Filter} title="周期筛选" />
+          <div className="content-range-actions">
+            {[30, 90, 180].map((days) => (
+              <button className="copy-button" onClick={() => applyQuickRange(days)} type="button" key={days}>
+                近{days}天
+              </button>
+            ))}
+            <button
+              className="copy-button"
+              onClick={() => {
+                setDraftStart("");
+                setDraftEnd("");
+              }}
+              type="button"
+            >
               清空
             </button>
-          }
-        />
-        <div className="content-date-row">
-          <label>
-            <span>开始日期</span>
-            <input type="date" value={contentStart} onChange={(event) => onContentRangeChange({ start: event.target.value })} />
-          </label>
-          <label>
-            <span>结束日期</span>
-            <input type="date" value={contentEnd} onChange={(event) => onContentRangeChange({ end: event.target.value })} />
-          </label>
-          <div className="content-range-meta">
-            <span>数据范围</span>
-            <strong>{rangeMeta}</strong>
+          </div>
+          <div className="content-date-row">
+            <label>
+              <span>开始日期</span>
+              <input type="date" value={draftStart} onChange={(event) => setDraftStart(event.target.value)} />
+            </label>
+            <label>
+              <span>结束日期</span>
+              <input type="date" value={draftEnd} onChange={(event) => setDraftEnd(event.target.value)} />
+            </label>
+            <div className="content-range-meta">
+              <span>数据范围</span>
+              <strong>{rangeMeta}</strong>
+            </div>
+            <button className="primary-button content-apply-button" onClick={() => onContentRangeApply({ start: draftStart, end: draftEnd })} type="button">
+              确定
+            </button>
+          </div>
+        </section>
+
+        <section className="stats-grid content-stats-grid">
+          {contentMetricCards.map((item) => (
+            <InsightMetricCard
+              key={item.key}
+              icon={item.icon}
+              label={item.label}
+              value={formatNumber(overview[item.overviewKey])}
+              sub={item.sub}
+              tone={item.tone}
+              sparkRows={sparkRows}
+              sparkKey={item.key}
+            />
+          ))}
+        </section>
+
+        <section className="panel content-trend-panel">
+          <SectionHeader icon={Activity} title="笔记数据表现分布" action={<StatusPill tone="neutral">{loading && !data ? "加载中" : `${formatNumber(trendRows.length)} 天`}</StatusPill>} />
+          <ContentTrendChart rows={trendRows} />
+        </section>
+
+        <section className="panel panel-table">
+          <SectionHeader
+            icon={FileText}
+            title="笔记明细"
+            action={<StatusPill tone="neutral">{loading && !data ? "加载中" : `${formatNumber(filteredNotes.length)} 条`}</StatusPill>}
+          />
+          {loading && !data ? <div className="loading">加载中</div> : <InsightNoteTable rows={filteredNotes} />}
+        </section>
+      </section>
+
+      <section className="content-section">
+        <div className="content-section-heading">
+          <div>
+            <div className="eyebrow">
+              <Users size={15} />
+              Demand Analysis
+            </div>
+            <h2>笔记类型及目标人群分析</h2>
           </div>
         </div>
-      </section>
 
-      <section className="stats-grid content-stats-grid">
-        <Stat icon={FileText} label="笔记总数" value={formatNumber(overview.noteTotal)} sub="当前周期" />
-        <Stat icon={Activity} label="笔记互动总量" value={formatNumber(overview.interactionTotal)} sub="赞+藏+评*2" tone="teal" />
-        <Stat icon={Heart} label="笔记点赞总量" value={formatNumber(overview.likeTotal)} sub="like_count" tone="purple" />
-        <Stat icon={Bookmark} label="笔记收藏总量" value={formatNumber(overview.collectedTotal)} sub="collected_count" tone="amber" />
-        <Stat icon={MessageCircle} label="笔记评论总量" value={formatNumber(overview.commentsTotal)} sub="comments_count" tone="blue" />
-      </section>
+        <section className="content-insight-grid">
+          <section className="panel">
+            <SectionHeader icon={Database} title="笔记类型占比" />
+            <TopicFrequencyList rows={topicRows} />
+          </section>
 
-      <section className="panel panel-table">
-        <SectionHeader
-          icon={BarChart3}
-          title="笔记分析"
-          action={<StatusPill tone="neutral">{loading && !data ? "加载中" : `${formatNumber(filteredNotes.length)} 条`}</StatusPill>}
-        />
-        {loading && !data ? <div className="loading">加载中</div> : <InsightNoteTable rows={filteredNotes} />}
-      </section>
-
-      <section className="content-insight-grid">
-        <section className="panel">
-          <SectionHeader icon={Database} title="笔记类型占比" />
-          <TopicFrequencyList rows={topicRows} />
+          <section className="panel">
+            <SectionHeader icon={Users} title="目标人群占比" />
+            <PersonaPieChart rows={personaRows} selectedPersona={selectedPersona} onSelect={setSelectedPersona} />
+          </section>
         </section>
 
-        <section className="panel">
-          <SectionHeader icon={Users} title="目标人群占比" />
-          <PersonaPieChart rows={personaRows} selectedPersona={selectedPersona} onSelect={setSelectedPersona} />
+        <section className="panel panel-table persona-detail-panel">
+          <SectionHeader
+            icon={Target}
+            title="人群笔记明细"
+            action={<StatusPill tone={selectedPersona ? "blue" : "neutral"}>{selectedPersona || "全部人群"}</StatusPill>}
+          />
+          <InsightNoteTable rows={personaDetailRows} compact />
         </section>
-      </section>
-
-      <section className="panel panel-table persona-detail-panel">
-        <SectionHeader
-          icon={Target}
-          title="人群笔记明细"
-          action={<StatusPill tone={selectedPersona ? "blue" : "neutral"}>{selectedPersona || "全部人群"}</StatusPill>}
-        />
-        <InsightNoteTable rows={personaDetailRows} compact />
       </section>
     </>
   );
@@ -2219,7 +2527,7 @@ export default function App() {
     setApiDate(value);
   }
 
-  function handleContentRangeChange(nextRange) {
+  function handleContentRangeApply(nextRange) {
     if (Object.prototype.hasOwnProperty.call(nextRange, "start")) setContentStart(nextRange.start);
     if (Object.prototype.hasOwnProperty.call(nextRange, "end")) setContentEnd(nextRange.end);
   }
@@ -2315,7 +2623,7 @@ export default function App() {
               filter={filter}
               contentStart={contentStart}
               contentEnd={contentEnd}
-              onContentRangeChange={handleContentRangeChange}
+              onContentRangeApply={handleContentRangeApply}
             />
           ) : null}
           {activeView === "ops" ? <OpsDashboard data={data} apiDate={apiDate} onApiDateChange={handleApiDateChange} /> : null}

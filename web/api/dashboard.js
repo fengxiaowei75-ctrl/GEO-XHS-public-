@@ -174,6 +174,24 @@ function sampleData() {
           note_url: "",
         },
       ],
+      trendDaily: [
+        { bucket_date: "2026-07-29", note_count: 8, like_total: 5200, collected_total: 1800, comments_total: 360 },
+        { bucket_date: "2026-07-30", note_count: 10, like_total: 6800, collected_total: 2400, comments_total: 420 },
+        { bucket_date: "2026-07-31", note_count: 7, like_total: 4300, collected_total: 1600, comments_total: 310 },
+        { bucket_date: "2026-08-01", note_count: 12, like_total: 7600, collected_total: 3100, comments_total: 540 },
+        { bucket_date: "2026-08-02", note_count: 15, like_total: 9800, collected_total: 3900, comments_total: 690 },
+        { bucket_date: "2026-08-03", note_count: 16, like_total: 11200, collected_total: 4200, comments_total: 730 },
+        { bucket_date: "2026-08-04", note_count: 22, like_total: 13600, collected_total: 5200, comments_total: 920 },
+      ],
+      sparklineDaily: [
+        { bucket_date: "2026-07-29", note_count: 8, like_total: 5200, collected_total: 1800, comments_total: 360 },
+        { bucket_date: "2026-07-30", note_count: 10, like_total: 6800, collected_total: 2400, comments_total: 420 },
+        { bucket_date: "2026-07-31", note_count: 7, like_total: 4300, collected_total: 1600, comments_total: 310 },
+        { bucket_date: "2026-08-01", note_count: 12, like_total: 7600, collected_total: 3100, comments_total: 540 },
+        { bucket_date: "2026-08-02", note_count: 15, like_total: 9800, collected_total: 3900, comments_total: 690 },
+        { bucket_date: "2026-08-03", note_count: 16, like_total: 11200, collected_total: 4200, comments_total: 730 },
+        { bucket_date: "2026-08-04", note_count: 22, like_total: 13600, collected_total: 5200, comments_total: 920 },
+      ],
     },
     queueStatus: [{ status: "success", count: 199 }],
     topFresh: [
@@ -415,6 +433,8 @@ module.exports = async function handler(req, res) {
       contentTopicFrequency,
       contentPersonaDistribution,
       contentNoteAnalysis,
+      contentTrendDaily,
+      contentSparklineDaily,
       opsOverviewRows,
       apiStatusSummary,
       apiUsageHourly,
@@ -726,6 +746,60 @@ module.exports = async function handler(req, res) {
         LIMIT 300
         `,
         contentParams,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          ${contentDateColumn}::date AS bucket_date,
+          count(DISTINCT a.note_id)::int AS note_count,
+          COALESCE(sum(a.like_count), 0)::bigint AS like_total,
+          COALESCE(sum(a.collected_count), 0)::bigint AS collected_total,
+          COALESCE(sum(a.comments_count), 0)::bigint AS comments_total
+        FROM public.geo_note_content_assets a
+        LEFT JOIN public.note_details n ON n.note_id = a.note_id
+        WHERE ${contentWhere}
+        GROUP BY ${contentDateColumn}::date
+        ORDER BY bucket_date
+        `,
+        contentParams,
+      ),
+      query(
+        client,
+        `
+        WITH bounds AS (
+          SELECT COALESCE(max(${contentDateColumn})::date, CURRENT_DATE) AS end_day
+          FROM public.geo_note_content_assets a
+          LEFT JOIN public.note_details n ON n.note_id = a.note_id
+          WHERE a.analysis_status = 'success'
+        ),
+        days AS (
+          SELECT generate_series((SELECT end_day - 29 FROM bounds), (SELECT end_day FROM bounds), interval '1 day')::date AS bucket_date
+        ),
+        agg AS (
+          SELECT
+            ${contentDateColumn}::date AS bucket_date,
+            count(DISTINCT a.note_id)::int AS note_count,
+            COALESCE(sum(a.like_count), 0)::bigint AS like_total,
+            COALESCE(sum(a.collected_count), 0)::bigint AS collected_total,
+            COALESCE(sum(a.comments_count), 0)::bigint AS comments_total
+          FROM public.geo_note_content_assets a
+          LEFT JOIN public.note_details n ON n.note_id = a.note_id
+          WHERE a.analysis_status = 'success'
+            AND ${contentDateColumn} >= (SELECT end_day - 29 FROM bounds)
+            AND ${contentDateColumn} < (SELECT end_day + 1 FROM bounds)
+          GROUP BY ${contentDateColumn}::date
+        )
+        SELECT
+          d.bucket_date,
+          COALESCE(a.note_count, 0)::int AS note_count,
+          COALESCE(a.like_total, 0)::bigint AS like_total,
+          COALESCE(a.collected_total, 0)::bigint AS collected_total,
+          COALESCE(a.comments_total, 0)::bigint AS comments_total
+        FROM days d
+        LEFT JOIN agg a ON a.bucket_date = d.bucket_date
+        ORDER BY d.bucket_date
+        `,
       ),
       query(
         client,
@@ -1215,6 +1289,8 @@ module.exports = async function handler(req, res) {
             topicFrequency: contentTopicFrequency,
             personaDistribution: contentPersonaDistribution,
             noteAnalysis: contentNoteAnalysis,
+            trendDaily: contentTrendDaily,
+            sparklineDaily: contentSparklineDaily,
           }
         : null,
       queueStatus: canContent ? queueStatus : [],
