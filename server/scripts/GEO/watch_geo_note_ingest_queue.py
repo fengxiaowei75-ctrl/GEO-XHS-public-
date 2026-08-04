@@ -16,6 +16,7 @@ from psycopg2 import sql
 from psycopg2.extras import Json
 
 import build_geo_content_assets as asset_pipeline
+import geo_ops_gateway as ops
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -462,8 +463,22 @@ def run_job(conn, args, job):
         f"note_id={job['note_id']} attempt={job['attempts']}/{job['max_attempts']} start",
         flush=True,
     )
+    ops.insert_event(
+        message="队列任务开始处理",
+        event_type="queue_job_start",
+        payload={
+            "queue_id": job["queue_id"],
+            "note_id": job["note_id"],
+            "attempt": job["attempts"],
+            "max_attempts": job["max_attempts"],
+        },
+    )
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    env["GEO_OPS_TRIGGER_TYPE"] = "queue"
+    env["GEO_OPS_TRIGGER_SOURCE"] = args.queue_table
+    env["GEO_OPS_JOB_REF_TYPE"] = "geo_note_ingest_queue"
+    env["GEO_OPS_JOB_REF_ID"] = str(job["queue_id"])
     try:
         completed = subprocess.run(
             command,
@@ -483,6 +498,16 @@ def run_job(conn, args, job):
         }
         if completed.returncode == 0:
             finish_job(conn, args, job, "success", result)
+            ops.insert_event(
+                message="队列任务处理成功",
+                event_type="queue_job_success",
+                payload={
+                    "queue_id": job["queue_id"],
+                    "note_id": job["note_id"],
+                    "elapsed_ms": elapsed_ms,
+                    "returncode": completed.returncode,
+                },
+            )
             print(
                 f"{datetime.now().isoformat(timespec='seconds')} queue_id={job['queue_id']} "
                 f"note_id={job['note_id']} success elapsed_ms={elapsed_ms}",
@@ -491,6 +516,18 @@ def run_job(conn, args, job):
         else:
             error = tail_text(completed.stderr or completed.stdout, 3000)
             finish_job(conn, args, job, "failed", result, error=error)
+            ops.insert_event(
+                message="队列任务处理失败",
+                level="error",
+                event_type="queue_job_failed",
+                payload={
+                    "queue_id": job["queue_id"],
+                    "note_id": job["note_id"],
+                    "elapsed_ms": elapsed_ms,
+                    "returncode": completed.returncode,
+                    "error_tail": error,
+                },
+            )
             print(
                 f"{datetime.now().isoformat(timespec='seconds')} queue_id={job['queue_id']} "
                 f"note_id={job['note_id']} failed returncode={completed.returncode}",
@@ -506,6 +543,17 @@ def run_job(conn, args, job):
             "stderr_tail": tail_text(exc.stderr if isinstance(exc.stderr, str) else ""),
         }
         finish_job(conn, args, job, "failed", result, error=f"job timeout after {args.job_timeout}s")
+        ops.insert_event(
+            message="队列任务处理超时",
+            level="error",
+            event_type="queue_job_timeout",
+            payload={
+                "queue_id": job["queue_id"],
+                "note_id": job["note_id"],
+                "elapsed_ms": elapsed_ms,
+                "timeout": args.job_timeout,
+            },
+        )
         print(
             f"{datetime.now().isoformat(timespec='seconds')} queue_id={job['queue_id']} "
             f"note_id={job['note_id']} timeout elapsed_ms={elapsed_ms}",
@@ -545,22 +593,55 @@ def watch_loop(conn, args):
 
 def main():
     args = enrich_args(parse_args())
+    ops.configure_from_args(args)
+    script_run_id = ops.start_script_run(
+        "watch_geo_note_ingest_queue",
+        trigger_type="watch" if args.watch else (os.environ.get("GEO_OPS_TRIGGER_TYPE") or "manual"),
+        command=sys.argv,
+        args=args,
+        worker_id=args.worker_id,
+    )
     conn = db_connect(args)
+    total = 0
     try:
         ensure_queue_table(conn, args)
         if args.enqueue_existing:
             count = enqueue_existing_notes(conn, args)
             print(f"historical_enqueued_or_touched={count}", flush=True)
+            ops.insert_event(
+                message="历史笔记入队完成",
+                event_type="enqueue_existing",
+                payload={"count": count, "prompt_version": args.prompt_version},
+            )
         if args.watch:
-            watch_loop(conn, args)
+            try:
+                watch_loop(conn, args)
+            except KeyboardInterrupt:
+                ops.finish_script_run(script_run_id, status="canceled", exit_code=130, processed_count=total)
+                return
         else:
-            total = 0
             while True:
                 processed = process_available(conn, args)
                 total += processed
                 if not processed or args.once:
                     break
             print(json.dumps({"processed": total}, ensure_ascii=False), flush=True)
+            ops.finish_script_run(
+                script_run_id,
+                status="success",
+                processed_count=total,
+                summary={"processed": total, "queue_table": args.queue_table},
+            )
+    except Exception as exc:
+        ops.finish_script_run(
+            script_run_id,
+            status="failed",
+            exit_code=1,
+            processed_count=total,
+            error_message=str(exc),
+            summary=ops.exception_summary(exc),
+        )
+        raise
     finally:
         conn.close()
 

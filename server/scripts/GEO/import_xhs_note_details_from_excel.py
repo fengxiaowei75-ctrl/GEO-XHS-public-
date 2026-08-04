@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import re
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
@@ -15,6 +16,8 @@ import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import Json, execute_values
 import requests
+
+import geo_ops_gateway as ops
 
 
 ENDATA_BASE_URL = "https://dataapi.endata.com.cn"
@@ -255,7 +258,18 @@ def request_note_detail(args, note_id):
     last_error = None
     for attempt in range(args.retries + 1):
         try:
-            response = requests.get(url, params=params, timeout=args.timeout)
+            response = ops.call_api(
+                "GET",
+                url,
+                provider_code="endata_xhs_note_detail",
+                operation="note_detail_fetch",
+                note_id=note_id,
+                attempt_no=attempt + 1,
+                max_attempts=args.retries + 1,
+                metadata={"source": "note_details"},
+                params=params,
+                timeout=args.timeout,
+            )
             if response.status_code >= 400:
                 raise RuntimeError(f"HTTP {response.status_code}: {response.text[:500]}")
             payload = response.json()
@@ -563,24 +577,65 @@ def print_summary(table, source_rows, details, written=0):
 
 def main():
     args = enrich_args(parse_args())
-    sheet_name, raw_records = read_xlsx_records(args.input, args.sheet)
-    source_rows = normalize_records(raw_records, args.input, args.keyword, args.max_notes)
-    print(f"sheet={sheet_name} rows={len(raw_records)} unique_note_ids={len(source_rows)}")
-    if not source_rows:
-        raise RuntimeError("No note IDs found in Excel.")
-
-    details = fetch_details(args, source_rows)
-    if args.dry_run:
-        print_summary(args.table, source_rows, details)
-        return
-
-    conn = db_connect(args)
+    ops.configure_from_args(args)
+    script_run_id = ops.start_script_run(
+        "import_xhs_note_details_from_excel",
+        trigger_type=os.environ.get("GEO_OPS_TRIGGER_TYPE") or "manual",
+        command=sys.argv,
+        args=args,
+    )
+    source_rows = []
+    details = {}
+    written = 0
     try:
-        ensure_table(conn, args.table)
-        written = upsert_rows(conn, args.table, source_rows, details)
-    finally:
-        conn.close()
-    print_summary(args.table, source_rows, details, written)
+        sheet_name, raw_records = read_xlsx_records(args.input, args.sheet)
+        source_rows = normalize_records(raw_records, args.input, args.keyword, args.max_notes)
+        print(f"sheet={sheet_name} rows={len(raw_records)} unique_note_ids={len(source_rows)}")
+        if not source_rows:
+            raise RuntimeError("No note IDs found in Excel.")
+
+        details = fetch_details(args, source_rows)
+        if args.dry_run:
+            print_summary(args.table, source_rows, details)
+            ops.finish_script_run(
+                script_run_id,
+                status="success",
+                processed_count=len(source_rows),
+                success_count=sum(1 for item in details.values() if item["detail_status"] == "success"),
+                failed_count=sum(1 for item in details.values() if item["detail_status"] == "failed"),
+                skipped_count=sum(1 for item in details.values() if item["detail_status"] == "skipped"),
+                summary={"dry_run": True, "table": args.table},
+            )
+            return
+
+        conn = db_connect(args)
+        try:
+            ensure_table(conn, args.table)
+            written = upsert_rows(conn, args.table, source_rows, details)
+        finally:
+            conn.close()
+        print_summary(args.table, source_rows, details, written)
+        ops.finish_script_run(
+            script_run_id,
+            status="success",
+            processed_count=len(source_rows),
+            success_count=sum(1 for item in details.values() if item["detail_status"] == "success"),
+            failed_count=sum(1 for item in details.values() if item["detail_status"] == "failed"),
+            skipped_count=sum(1 for item in details.values() if item["detail_status"] == "skipped"),
+            summary={"table": args.table, "written": written},
+        )
+    except Exception as exc:
+        ops.finish_script_run(
+            script_run_id,
+            status="failed",
+            exit_code=1,
+            processed_count=len(source_rows) if source_rows else None,
+            success_count=sum(1 for item in details.values() if item.get("detail_status") == "success"),
+            failed_count=sum(1 for item in details.values() if item.get("detail_status") == "failed"),
+            error_message=str(exc),
+            summary=ops.exception_summary(exc),
+        )
+        raise
 
 
 if __name__ == "__main__":

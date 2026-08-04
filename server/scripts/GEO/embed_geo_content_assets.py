@@ -11,6 +11,8 @@ import psycopg2
 from psycopg2 import sql
 import requests
 
+import geo_ops_gateway as ops
+
 
 DEFAULT_ENV_FILE = os.environ.get("XHS_SYNC_ENV_FILE") or (
     "/opt/xhs-sync/sync.env"
@@ -208,7 +210,7 @@ ORDER BY a.fresh_hot_score DESC NULLS LAST, a.updated_at DESC
         ]
 
 
-def get_embedding(args, text):
+def get_embedding(args, text, asset=None):
     text = (text or "").strip()
     if not text:
         return None
@@ -224,7 +226,21 @@ def get_embedding(args, text):
     last_error = None
     for attempt in range(args.retries + 1):
         try:
-            response = requests.post(ARK_EMBEDDING_URL, headers=headers, json=body, timeout=args.timeout)
+            response = ops.call_api(
+                "POST",
+                ARK_EMBEDDING_URL,
+                provider_code="volcengine_ark_embedding",
+                operation="asset_embedding",
+                model_name=args.embedding_model,
+                note_id=(asset or {}).get("note_id"),
+                asset_id=(asset or {}).get("asset_id"),
+                attempt_no=attempt + 1,
+                max_attempts=args.retries + 1,
+                metadata={"max_text_chars": args.max_text_chars},
+                headers=headers,
+                json=body,
+                timeout=args.timeout,
+            )
             if response.status_code >= 400:
                 raise RuntimeError(f"HTTP {response.status_code}: {response.text[:1000]}")
             payload = response.json()
@@ -286,7 +302,7 @@ def embed_assets(conn, args, specific_asset_ids=None):
                 }, ensure_ascii=False, indent=2))
                 ok += 1
                 continue
-            embedding = get_embedding(args, asset["asset_text"])
+            embedding = get_embedding(args, asset["asset_text"], asset=asset)
             if len(embedding) != 2048:
                 raise RuntimeError(f"embedding dimension mismatch: expected 2048, got {len(embedding)}")
             upsert_vector(conn, args, asset, embedding)
@@ -336,14 +352,46 @@ def watch_loop(args):
 
 def main():
     args = enrich_args(parse_args())
+    ops.configure_from_args(args)
+    script_run_id = ops.start_script_run(
+        "embed_geo_content_assets",
+        trigger_type="watch" if args.watch else (os.environ.get("GEO_OPS_TRIGGER_TYPE") or "manual"),
+        command=sys.argv,
+        args=args,
+    )
     if args.watch:
-        watch_loop(args)
+        try:
+            watch_loop(args)
+        except KeyboardInterrupt:
+            ops.finish_script_run(script_run_id, status="canceled", exit_code=130)
+            return
+        except Exception as exc:
+            ops.finish_script_run(
+                script_run_id,
+                status="failed",
+                exit_code=1,
+                error_message=str(exc),
+                summary=ops.exception_summary(exc),
+            )
+            raise
         return
 
     conn = db_connect(args)
+    ok = fail = 0
     try:
         ensure_vector_table(conn, args.asset_table, args.vector_table)
         ok, fail = embed_assets(conn, args)
+    except Exception as exc:
+        ops.finish_script_run(
+            script_run_id,
+            status="failed",
+            exit_code=1,
+            success_count=ok,
+            failed_count=fail,
+            error_message=str(exc),
+            summary=ops.exception_summary(exc),
+        )
+        raise
     finally:
         conn.close()
     print(json.dumps({
@@ -352,6 +400,14 @@ def main():
         "success": ok,
         "failed": fail,
     }, ensure_ascii=False, indent=2))
+    ops.finish_script_run(
+        script_run_id,
+        status="success",
+        processed_count=ok + fail,
+        success_count=ok,
+        failed_count=fail,
+        summary={"vector_table": args.vector_table, "embedding_model": args.embedding_model},
+    )
 
 
 if __name__ == "__main__":

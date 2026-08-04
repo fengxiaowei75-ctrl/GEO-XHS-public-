@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import re
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -13,8 +14,10 @@ from psycopg2 import sql
 from psycopg2.extras import Json, execute_values
 import requests
 
+import geo_ops_gateway as ops
 
-ARK_API_KEY = os.environ.get("ARK_API_KEY", "")
+
+ARK_API_KEY = ""
 ARK_URL = "https://ark.cn-beijing.volces.com/api/v3/responses"
 ARK_MODEL = "doubao-seed-2-0-mini-260428"
 DEFAULT_ENV_FILE = os.environ.get("XHS_SYNC_ENV_FILE") or (
@@ -42,6 +45,7 @@ def parse_args():
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--retries", type=int, default=3)
     parser.add_argument("--retry-sleep", type=float, default=2.0)
+    parser.add_argument("--ark-api-key", default="")
     parser.add_argument("--db-host", default="localhost")
     parser.add_argument("--db-port", default="5432")
     parser.add_argument("--db-name", default="xhs_geo")
@@ -67,8 +71,18 @@ def load_env_file():
 def enrich_args(args):
     values = load_env_file()
     args.db_password = args.db_password or os.environ.get("PGPASSWORD") or values.get("PGPASSWORD") or ""
+    args.ark_api_key = (
+        getattr(args, "ark_api_key", "")
+        or os.environ.get("ARK_API_KEY")
+        or os.environ.get("VOLC_API_KEY")
+        or values.get("ARK_API_KEY")
+        or values.get("VOLC_API_KEY")
+        or ARK_API_KEY
+    )
     if not args.dry_run and not args.db_password:
         raise RuntimeError("Missing database password. Set PGPASSWORD or --db-password.")
+    if not args.dry_run and not args.ark_api_key:
+        raise RuntimeError("Missing Ark API key. Set ARK_API_KEY/VOLC_API_KEY or --ark-api-key.")
     return args
 
 
@@ -502,12 +516,24 @@ def should_try_fallback(error):
     )
 
 
-def download_image_as_data_url(image_url):
+def download_image_as_data_url(args, image_url, image_task=None):
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150 Safari/537.36",
         "Referer": "https://www.xiaohongshu.com/",
     }
-    response = requests.get(image_url, headers=headers, timeout=60)
+    response = ops.call_api(
+        "GET",
+        image_url,
+        provider_code="xhs_image_download",
+        operation="image_download_for_vision",
+        note_id=(image_task or {}).get("note_id"),
+        image_url=image_url,
+        attempt_no=1,
+        max_attempts=1,
+        metadata={"image_index": (image_task or {}).get("image_index")},
+        headers=headers,
+        timeout=60,
+    )
     if response.status_code >= 400:
         raise RuntimeError(f"image download HTTP {response.status_code}: {response.text[:300]}")
     if not response.content:
@@ -521,10 +547,10 @@ def download_image_as_data_url(image_url):
     return f"data:{content_type};base64,{encoded}"
 
 
-def image_input_for_model(args, image_url):
+def image_input_for_model(args, image_url, image_task=None):
     if args.remote_image_url:
         return image_url, "remote_url"
-    return download_image_as_data_url(image_url), "data_url"
+    return download_image_as_data_url(args, image_url, image_task=image_task), "data_url"
 
 
 def analyze_image(args, image_task):
@@ -547,7 +573,7 @@ def analyze_image(args, image_task):
         ],
     }
     headers = {
-        "Authorization": f"Bearer {ARK_API_KEY}",
+        "Authorization": f"Bearer {args.ark_api_key}",
         "Content-Type": "application/json",
     }
     last_error = None
@@ -556,7 +582,7 @@ def analyze_image(args, image_task):
     for image_url in candidates:
         last_analysis_url = image_url
         try:
-            model_image_url, transport = image_input_for_model(args, image_url)
+            model_image_url, transport = image_input_for_model(args, image_url, image_task=image_task)
             last_transport = transport
         except Exception as exc:
             last_error = exc
@@ -567,7 +593,25 @@ def analyze_image(args, image_task):
         body["input"][0]["content"][0]["image_url"] = model_image_url
         for attempt in range(args.retries + 1):
             try:
-                response = requests.post(ARK_URL, headers=headers, json=body, timeout=args.timeout)
+                response = ops.call_api(
+                    "POST",
+                    ARK_URL,
+                    provider_code="volcengine_ark_vision",
+                    operation="image_analysis",
+                    model_name=ARK_MODEL,
+                    note_id=image_task["note_id"],
+                    image_url=image_url,
+                    attempt_no=attempt + 1,
+                    max_attempts=args.retries + 1,
+                    metadata={
+                        "image_index": image_task.get("image_index"),
+                        "image_source": image_task.get("image_source"),
+                        "transport": last_transport,
+                    },
+                    headers=headers,
+                    json=body,
+                    timeout=args.timeout,
+                )
                 if response.status_code >= 400:
                     raise RuntimeError(f"HTTP {response.status_code}: {response.text[:1000]}")
                 payload = response.json()
@@ -866,6 +910,16 @@ def print_summary(target_table, image_rows, results, written=0):
 
 def main():
     args = enrich_args(parse_args())
+    ops.configure_from_args(args)
+    script_run_id = ops.start_script_run(
+        "analyze_xhs_geo_note_images",
+        trigger_type=os.environ.get("GEO_OPS_TRIGGER_TYPE") or "manual",
+        command=sys.argv,
+        args=args,
+    )
+    image_rows = []
+    results = []
+    written = 0
     conn = db_connect(args)
     try:
         ensure_target_table(conn, args.target_table)
@@ -874,14 +928,50 @@ def main():
         if args.dry_run:
             sample = image_rows[:5]
             print(json.dumps(sample, ensure_ascii=False, default=str, indent=2))
+            ops.finish_script_run(
+                script_run_id,
+                status="success",
+                processed_count=len(image_rows),
+                skipped_count=len(image_rows),
+                summary={"dry_run": True, "target_table": args.target_table},
+            )
             return
         if not image_rows:
             print_summary(args.target_table, image_rows, [], 0)
+            ops.finish_script_run(
+                script_run_id,
+                status="success",
+                processed_count=0,
+                success_count=0,
+                failed_count=0,
+                skipped_count=0,
+                summary={"target_table": args.target_table, "images_to_process": 0},
+            )
             return
         results, written = analyze_images_and_upsert(conn, args, image_rows)
+    except Exception as exc:
+        ops.finish_script_run(
+            script_run_id,
+            status="failed",
+            exit_code=1,
+            processed_count=len(image_rows) if image_rows else None,
+            success_count=sum(1 for result in results if result.get("status") == "success"),
+            failed_count=sum(1 for result in results if result.get("status") == "failed"),
+            error_message=str(exc),
+            summary=ops.exception_summary(exc),
+        )
+        raise
     finally:
         conn.close()
     print_summary(args.target_table, image_rows, results, written)
+    ops.finish_script_run(
+        script_run_id,
+        status="success",
+        processed_count=len(image_rows),
+        success_count=sum(1 for result in results if result["status"] == "success"),
+        failed_count=sum(1 for result in results if result["status"] == "failed"),
+        summary={"target_table": args.target_table, "written": written},
+    )
 
 
 if __name__ == "__main__":

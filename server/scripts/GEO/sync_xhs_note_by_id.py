@@ -16,6 +16,7 @@ import analyze_xhs_geo_note_images as image_pipeline
 import build_geo_content_assets as asset_pipeline
 import embed_geo_content_assets as vector_pipeline
 import import_xhs_note_details_from_excel as detail_pipeline
+import geo_ops_gateway as ops
 
 
 DEFAULT_DETAIL_TABLE = "public.note_details"
@@ -148,7 +149,7 @@ def build_detail_args(args):
         args.endata_token
         or os.environ.get("ENDATA_TOKEN")
         or values.get("ENDATA_TOKEN")
-        or detail_pipeline.DEFAULT_ENDATA_TOKEN
+        or ""
     )
     db_password = db_password_from_env(args)
     if not endata_token:
@@ -172,7 +173,7 @@ def build_detail_args(args):
 
 
 def build_image_args(args, note_ids, db_password):
-    return SimpleNamespace(
+    return image_pipeline.enrich_args(SimpleNamespace(
         source_table=args.detail_table,
         target_table=args.image_table,
         note_id=note_ids,
@@ -185,12 +186,13 @@ def build_image_args(args, note_ids, db_password):
         timeout=args.timeout,
         retries=args.retries,
         retry_sleep=args.retry_sleep,
+        ark_api_key=args.ark_api_key,
         db_host=args.db_host,
         db_port=args.db_port,
         db_name=args.db_name,
         db_user=args.db_user,
         db_password=db_password,
-    )
+    ))
 
 
 def build_asset_args(args, note_ids, db_password):
@@ -283,34 +285,29 @@ def embed_assets(conn, args, note_ids, db_password, force=False):
 
 def main():
     args = parse_args()
+    ops.configure_from_args(args)
+    script_run_id = ops.start_script_run(
+        "sync_xhs_note_by_id",
+        trigger_type=os.environ.get("GEO_OPS_TRIGGER_TYPE") or "manual",
+        trigger_source=os.environ.get("GEO_OPS_TRIGGER_SOURCE"),
+        job_ref_type=os.environ.get("GEO_OPS_JOB_REF_TYPE"),
+        job_ref_id=os.environ.get("GEO_OPS_JOB_REF_ID"),
+        command=sys.argv,
+        args=args,
+    )
     note_ids = collect_note_ids(args)
     if not note_ids:
-        raise RuntimeError("Pass at least one --note-id, --note-ids, or --note-id-file.")
+        error = "Pass at least one --note-id, --note-ids, or --note-id-file."
+        ops.finish_script_run(script_run_id, status="failed", exit_code=1, error_message=error)
+        raise RuntimeError(error)
 
     source_rows = make_source_rows(note_ids, args.source_keyword)
     detail_args = build_detail_args(args)
+    ops.configure_from_args(detail_args)
 
     print(f"note_ids={len(note_ids)}")
-    details = detail_pipeline.fetch_details(detail_args, source_rows)
-    detail_success = sum(1 for item in details.values() if item["detail_status"] == "success")
-    detail_failed = sum(1 for item in details.values() if item["detail_status"] != "success")
-
-    if args.dry_run:
-        print(json.dumps({
-            "detail_table": args.detail_table,
-            "image_table": args.image_table,
-            "asset_table": args.asset_table,
-            "vector_table": args.vector_table,
-            "note_ids": note_ids,
-            "detail_success": detail_success,
-            "detail_failed": detail_failed,
-            "skip_images": args.skip_images,
-            "build_asset": args.build_asset,
-            "embed_asset": args.embed_asset,
-        }, ensure_ascii=False, indent=2))
-        return
-
-    conn = detail_pipeline.db_connect(detail_args)
+    details = {}
+    detail_success = detail_failed = 0
     image_results = []
     image_written = 0
     image_count = 0
@@ -318,7 +315,37 @@ def main():
     asset_failed = 0
     vector_ok = 0
     vector_failed = 0
+    conn = None
     try:
+        details = detail_pipeline.fetch_details(detail_args, source_rows)
+        detail_success = sum(1 for item in details.values() if item["detail_status"] == "success")
+        detail_failed = sum(1 for item in details.values() if item["detail_status"] != "success")
+
+        if args.dry_run:
+            print(json.dumps({
+                "detail_table": args.detail_table,
+                "image_table": args.image_table,
+                "asset_table": args.asset_table,
+                "vector_table": args.vector_table,
+                "note_ids": note_ids,
+                "detail_success": detail_success,
+                "detail_failed": detail_failed,
+                "skip_images": args.skip_images,
+                "build_asset": args.build_asset,
+                "embed_asset": args.embed_asset,
+            }, ensure_ascii=False, indent=2))
+            ops.finish_script_run(
+                script_run_id,
+                status="success",
+                processed_count=len(note_ids),
+                success_count=detail_success,
+                failed_count=detail_failed,
+                skipped_count=len(note_ids),
+                summary={"dry_run": True},
+            )
+            return
+
+        conn = detail_pipeline.db_connect(detail_args)
         detail_pipeline.ensure_table(conn, args.detail_table)
         detail_written = detail_pipeline.upsert_rows(conn, args.detail_table, source_rows, details)
         print(f"details_written={detail_written} success={detail_success} failed={detail_failed}")
@@ -337,8 +364,21 @@ def main():
 
         if args.embed_asset:
             vector_ok, vector_failed = embed_assets(conn, args, note_ids, detail_args.db_password, force=args.force_embedding)
+    except Exception as exc:
+        ops.finish_script_run(
+            script_run_id,
+            status="failed",
+            exit_code=1,
+            processed_count=len(note_ids),
+            success_count=detail_success + sum(1 for item in image_results if item.get("status") == "success") + len([item for item in asset_ids if item is not None]) + vector_ok,
+            failed_count=detail_failed + sum(1 for item in image_results if item.get("status") == "failed") + asset_failed + vector_failed,
+            error_message=str(exc),
+            summary=ops.exception_summary(exc),
+        )
+        raise
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
     print(json.dumps({
         "detail_table": args.detail_table,
@@ -357,6 +397,23 @@ def main():
         "vector_success": vector_ok,
         "vector_failed": vector_failed,
     }, ensure_ascii=False, indent=2))
+    ops.finish_script_run(
+        script_run_id,
+        status="success",
+        processed_count=len(note_ids),
+        success_count=detail_success + sum(1 for item in image_results if item["status"] == "success") + len([item for item in asset_ids if item is not None]) + vector_ok,
+        failed_count=detail_failed + sum(1 for item in image_results if item["status"] == "failed") + asset_failed + vector_failed,
+        summary={
+            "detail_success": detail_success,
+            "detail_failed": detail_failed,
+            "images_to_process": image_count,
+            "image_written": image_written,
+            "asset_written": len([item for item in asset_ids if item is not None]),
+            "asset_failed": asset_failed,
+            "vector_success": vector_ok,
+            "vector_failed": vector_failed,
+        },
+    )
 
 
 if __name__ == "__main__":

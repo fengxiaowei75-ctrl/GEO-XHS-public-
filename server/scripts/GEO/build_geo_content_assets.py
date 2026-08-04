@@ -4,6 +4,7 @@ import json
 import math
 import os
 import re
+import sys
 import time
 from datetime import date, datetime
 from decimal import Decimal
@@ -13,6 +14,8 @@ import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import Json
 import requests
+
+import geo_ops_gateway as ops
 
 
 DEFAULT_ENV_FILE = os.environ.get("XHS_SYNC_ENV_FILE") or (
@@ -720,8 +723,20 @@ def call_kimi(args, system_prompt, user_prompt):
     started = time.monotonic()
     for attempt in range(args.retries + 1):
         try:
-            response = requests.post(
+            response = ops.call_api(
+                "POST",
                 f"{args.kimi_base_url}/chat/completions",
+                provider_code="kimi_chat",
+                operation="content_asset_summary",
+                model_name=args.kimi_model,
+                note_id=getattr(args, "_current_note_id", None),
+                attempt_no=attempt + 1,
+                max_attempts=args.retries + 1,
+                metadata={
+                    "prompt_version": getattr(args, "_current_prompt_version", None),
+                    "thinking": args.kimi_thinking,
+                    "temperature": args.kimi_temperature,
+                },
                 headers=headers,
                 json=body,
                 timeout=args.timeout,
@@ -919,6 +934,8 @@ def build_input_payload(note, image_items, args, system_prompt, user_prompt):
 
 
 def process_note(conn, args, note):
+    args._current_note_id = note["note_id"]
+    args._current_prompt_version = args.prompt_version
     image_items = fetch_image_items(conn, args.image_table, note["note_id"], args.max_images_per_note)
     system_prompt = build_system_prompt()
     user_prompt = build_user_prompt(note, image_items, args)
@@ -969,9 +986,17 @@ def print_summary(args, notes, asset_ids, failed):
 
 def main():
     args = enrich_args(parse_args())
+    ops.configure_from_args(args)
+    script_run_id = ops.start_script_run(
+        "build_geo_content_assets",
+        trigger_type=os.environ.get("GEO_OPS_TRIGGER_TYPE") or "manual",
+        command=sys.argv,
+        args=args,
+    )
     conn = db_connect(args)
     asset_ids = []
     failed = 0
+    notes = []
     try:
         ensure_tables(conn, args.asset_table, args.run_table)
         notes = fetch_candidate_notes(conn, args)
@@ -986,9 +1011,34 @@ def main():
                 print(f"[{index}/{len(notes)}] note_id={note['note_id']} failed={exc}")
                 if args.note_id and len(notes) == 1:
                     raise
+    except Exception as exc:
+        ops.finish_script_run(
+            script_run_id,
+            status="failed",
+            exit_code=1,
+            processed_count=len(notes) if notes else None,
+            success_count=len([item for item in asset_ids if item is not None]),
+            failed_count=failed,
+            error_message=str(exc),
+            summary=ops.exception_summary(exc),
+        )
+        raise
     finally:
         conn.close()
     print_summary(args, notes, asset_ids, failed)
+    ops.finish_script_run(
+        script_run_id,
+        status="success",
+        processed_count=len(notes),
+        success_count=len([item for item in asset_ids if item is not None]),
+        failed_count=failed,
+        summary={
+            "asset_table": args.asset_table,
+            "run_table": args.run_table,
+            "prompt_version": args.prompt_version,
+            "rank_mode": args.rank_mode,
+        },
+    )
 
 
 if __name__ == "__main__":
