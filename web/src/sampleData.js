@@ -320,6 +320,17 @@ export const sampleDashboard = {
           sampled_at: "2026-08-04T06:36:00.000Z",
           scripts: [{ script_key: "sync_xhs_maifudi_notes", display_name_cn: "麦富迪品牌笔记同步", scope: "按品牌/关键词拉取候选笔记" }],
         },
+        {
+          url: "/v2/xhs/getstandardcommentinfo",
+          display_name_cn: "小红书笔记评论信息",
+          description_cn: "按笔记拉取评论相关数据，用于判断评论区情绪反馈、争议点和可复用互动钩子；目前该路径只在艺恩余额快照中出现，具体调用脚本需要接入网关日志后精确归因。",
+          count: 17,
+          previous_count: 17,
+          count_delta: 0,
+          share_pct: 0.22,
+          sampled_at: "2026-08-04T06:36:00.000Z",
+          scripts: [{ script_key: "untracked_endata_comment_consumer", display_name_cn: "未接入网关的评论抓取", scope: "余额快照已记录消耗，等待脚本接入 geo_ops_api_call_logs" }],
+        },
       ],
       endpointHistory: [
         { bucket_start: "2026-08-04T06:34:00.000Z", url: "/v2/xhs/getstandardnoteinfo", display_name_cn: "小红书笔记详情", count: 6923, share_pct: 90.16 },
@@ -331,6 +342,9 @@ export const sampleDashboard = {
         { bucket_start: "2026-08-04T06:34:00.000Z", url: "/v2/xhs/getxhsnotelist_gb", display_name_cn: "品牌/关键词笔记列表", count: 279, share_pct: 3.63 },
         { bucket_start: "2026-08-04T06:35:00.000Z", url: "/v2/xhs/getxhsnotelist_gb", display_name_cn: "品牌/关键词笔记列表", count: 279, share_pct: 3.63 },
         { bucket_start: "2026-08-04T06:36:00.000Z", url: "/v2/xhs/getxhsnotelist_gb", display_name_cn: "品牌/关键词笔记列表", count: 279, share_pct: 3.63 },
+        { bucket_start: "2026-08-04T06:34:00.000Z", url: "/v2/xhs/getstandardcommentinfo", display_name_cn: "小红书笔记评论信息", count: 17, share_pct: 0.22 },
+        { bucket_start: "2026-08-04T06:35:00.000Z", url: "/v2/xhs/getstandardcommentinfo", display_name_cn: "小红书笔记评论信息", count: 17, share_pct: 0.22 },
+        { bucket_start: "2026-08-04T06:36:00.000Z", url: "/v2/xhs/getstandardcommentinfo", display_name_cn: "小红书笔记评论信息", count: 17, share_pct: 0.22 },
       ],
       scriptUsageHourly: [
         { bucket_start: "2026-08-04T04:00:00.000Z", script_key: "watch_geo_note_ingest_queue", display_name_cn: "GEO 笔记队列 worker", url: "/v2/xhs/getstandardnoteinfo", endpoint_display_name_cn: "小红书笔记详情", operation: "note_detail_fetch", calls_total: 6, calls_success: 6, calls_failed: 0 },
