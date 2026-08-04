@@ -16,10 +16,7 @@ function getPool() {
       database: process.env.PGDATABASE,
       user: process.env.PGUSER,
       password: process.env.PGPASSWORD,
-      ssl:
-        process.env.PGSSLMODE === "require"
-          ? { rejectUnauthorized: false }
-          : false,
+      ssl: process.env.PGSSLMODE === "require" ? { rejectUnauthorized: false } : false,
       max: 2,
       idleTimeoutMillis: 30000,
     });
@@ -50,7 +47,7 @@ function sampleData() {
     topFresh: [
       {
         note_id: "6a1ba9a10000000006031daa",
-        title: "每天拆解一个运营知识—GEO排名优化",
+        title: "每天拆解一个运营知识-GEO排名优化",
         publish_time: "2026-05-31T00:00:00.000Z",
         interaction_score: 968,
         fresh_hot_score: 361.2,
@@ -96,17 +93,43 @@ function sampleData() {
       },
     ],
     recentRuns: [],
-    failedQueue: [
-      {
-        note_id: "pending-recharge",
-        error_preview: "Endata 返回：当前账户余额不足，请充值后重试失败详情任务",
+    failedQueue: [],
+    ops: {
+      overview: {
+        apiCallsTotal: 1219,
+        apiCallsFailed: 139,
+        totalTokens: 1018740,
+        runningScripts: 2,
+        activeProviders: 6,
+        activeModels: 3,
       },
-    ],
+      apiStatusSummary: [
+        {
+          provider_code: "kimi_chat",
+          display_name_cn: "Kimi 内容资产总结",
+          provider_type: "llm_chat",
+          calls_total: 96,
+          calls_success: 90,
+          calls_failed: 6,
+          total_tokens: 1018740,
+          avg_latency_ms: 50000,
+          latest_started_at: "2026-08-04T02:06:17.122Z",
+        },
+      ],
+      apiUsage: { hourly: [], daily: [], weekly: [] },
+      modelUsageSummary: [],
+      scriptRunSummary: [],
+      recentScriptRuns: [],
+      scriptEvents: [],
+      modelConfigs: [],
+      credentials: [],
+      rateLimitRules: [],
+    },
   };
 }
 
 module.exports = async function handler(req, res) {
-  res.setHeader("Cache-Control", "s-maxage=60, stale-while-revalidate=300");
+  res.setHeader("Cache-Control", "s-maxage=30, stale-while-revalidate=120");
 
   if (!hasDatabaseEnv()) {
     res.status(200).json(sampleData());
@@ -126,6 +149,18 @@ module.exports = async function handler(req, res) {
       visualPatterns,
       recentRuns,
       failedQueue,
+      opsOverviewRows,
+      apiStatusSummary,
+      apiUsageHourly,
+      apiUsageDaily,
+      apiUsageWeekly,
+      modelUsageSummary,
+      scriptRunSummary,
+      recentScriptRuns,
+      scriptEvents,
+      modelConfigs,
+      credentials,
+      rateLimitRules,
     ] = await Promise.all([
       query(
         client,
@@ -278,6 +313,262 @@ module.exports = async function handler(req, res) {
         LIMIT 8
         `,
       ),
+      query(
+        client,
+        `
+        SELECT
+          (SELECT count(*)::int FROM public.geo_ops_api_call_logs) AS "apiCallsTotal",
+          (SELECT count(*)::int FROM public.geo_ops_api_call_logs WHERE status <> 'success') AS "apiCallsFailed",
+          (SELECT COALESCE(sum(total_tokens), 0)::bigint FROM public.geo_ops_api_call_logs) AS "totalTokens",
+          (SELECT count(*)::int FROM public.geo_ops_script_runs WHERE status = 'running') AS "runningScripts",
+          (SELECT count(*)::int FROM public.geo_ops_api_registry WHERE is_active) AS "activeProviders",
+          (SELECT count(*)::int FROM public.geo_ops_model_configs WHERE is_active) AS "activeModels"
+        `,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          l.provider_code,
+          r.display_name_cn,
+          r.provider_type,
+          r.billing_unit,
+          count(*)::int AS calls_total,
+          count(*) FILTER (WHERE l.status = 'success')::int AS calls_success,
+          count(*) FILTER (WHERE l.status <> 'success')::int AS calls_failed,
+          COALESCE(sum(l.total_tokens), 0)::bigint AS total_tokens,
+          round(avg(l.latency_ms)::numeric, 1)::float AS avg_latency_ms,
+          max(l.started_at) AS latest_started_at
+        FROM public.geo_ops_api_call_logs l
+        JOIN public.geo_ops_api_registry r ON r.provider_code = l.provider_code
+        GROUP BY l.provider_code, r.display_name_cn, r.provider_type, r.billing_unit
+        ORDER BY calls_total DESC, l.provider_code
+        `,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          u.bucket_start,
+          u.provider_code,
+          r.display_name_cn,
+          r.provider_type,
+          m.model_name,
+          m.model_role,
+          u.operation,
+          u.calls_total,
+          u.calls_success,
+          u.calls_failed,
+          u.avg_latency_ms,
+          u.input_tokens,
+          u.output_tokens,
+          u.total_tokens
+        FROM public.geo_ops_api_usage_hourly u
+        JOIN public.geo_ops_api_registry r ON r.provider_code = u.provider_code
+        LEFT JOIN public.geo_ops_model_configs m ON m.model_config_id = u.model_config_id
+        WHERE u.bucket_start >= now() - interval '72 hours'
+        ORDER BY u.bucket_start, u.provider_code, u.operation
+        `,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          u.bucket_start,
+          u.provider_code,
+          r.display_name_cn,
+          r.provider_type,
+          m.model_name,
+          m.model_role,
+          u.operation,
+          u.calls_total,
+          u.calls_success,
+          u.calls_failed,
+          u.avg_latency_ms,
+          u.input_tokens,
+          u.output_tokens,
+          u.total_tokens
+        FROM public.geo_ops_api_usage_daily u
+        JOIN public.geo_ops_api_registry r ON r.provider_code = u.provider_code
+        LEFT JOIN public.geo_ops_model_configs m ON m.model_config_id = u.model_config_id
+        WHERE u.bucket_start >= now() - interval '60 days'
+        ORDER BY u.bucket_start, u.provider_code, u.operation
+        `,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          u.bucket_start,
+          u.provider_code,
+          r.display_name_cn,
+          r.provider_type,
+          m.model_name,
+          m.model_role,
+          u.operation,
+          u.calls_total,
+          u.calls_success,
+          u.calls_failed,
+          u.avg_latency_ms,
+          u.input_tokens,
+          u.output_tokens,
+          u.total_tokens
+        FROM public.geo_ops_api_usage_weekly u
+        JOIN public.geo_ops_api_registry r ON r.provider_code = u.provider_code
+        LEFT JOIN public.geo_ops_model_configs m ON m.model_config_id = u.model_config_id
+        WHERE u.bucket_start >= now() - interval '26 weeks'
+        ORDER BY u.bucket_start, u.provider_code, u.operation
+        `,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          COALESCE(m.model_name, l.provider_code) AS model_name,
+          COALESCE(m.display_name_cn, r.display_name_cn) AS display_name_cn,
+          r.provider_code,
+          r.provider_type,
+          m.model_role,
+          count(*)::int AS calls_total,
+          count(*) FILTER (WHERE l.status <> 'success')::int AS calls_failed,
+          COALESCE(sum(l.total_tokens), 0)::bigint AS total_tokens,
+          max(l.started_at) AS latest_started_at
+        FROM public.geo_ops_api_call_logs l
+        JOIN public.geo_ops_api_registry r ON r.provider_code = l.provider_code
+        LEFT JOIN public.geo_ops_model_configs m ON m.model_config_id = l.model_config_id
+        WHERE r.provider_type IN ('llm_chat', 'llm_vision', 'embedding', 'speech_to_text')
+        GROUP BY COALESCE(m.model_name, l.provider_code), COALESCE(m.display_name_cn, r.display_name_cn),
+          r.provider_code, r.provider_type, m.model_role
+        ORDER BY calls_total DESC, model_name
+        `,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          s.script_key,
+          s.display_name_cn,
+          s.description_cn,
+          s.service_name,
+          s.is_active,
+          count(r.script_run_id)::int AS runs_total,
+          count(r.script_run_id) FILTER (WHERE r.status = 'running')::int AS running_count,
+          count(r.script_run_id) FILTER (WHERE r.status = 'failed')::int AS failed_count,
+          latest.status AS latest_status,
+          latest.started_at AS latest_started_at,
+          latest.finished_at AS latest_finished_at
+        FROM public.geo_ops_scripts s
+        LEFT JOIN public.geo_ops_script_runs r ON r.script_key = s.script_key
+        LEFT JOIN LATERAL (
+          SELECT status, started_at, finished_at
+          FROM public.geo_ops_script_runs lr
+          WHERE lr.script_key = s.script_key
+          ORDER BY lr.started_at DESC
+          LIMIT 1
+        ) latest ON true
+        GROUP BY s.script_key, s.display_name_cn, s.description_cn, s.service_name, s.is_active,
+          latest.status, latest.started_at, latest.finished_at
+        ORDER BY s.script_key
+        `,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          r.script_run_id,
+          r.script_key,
+          s.display_name_cn,
+          r.status,
+          r.trigger_type,
+          r.note_id,
+          r.job_ref_id,
+          r.started_at,
+          r.finished_at,
+          r.duration_ms,
+          r.success_count,
+          r.failed_count,
+          left(r.error_message, 240) AS error_message
+        FROM public.geo_ops_script_runs r
+        LEFT JOIN public.geo_ops_scripts s ON s.script_key = r.script_key
+        ORDER BY r.started_at DESC
+        LIMIT 30
+        `,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          e.event_id,
+          e.script_key,
+          s.display_name_cn,
+          e.event_time,
+          e.level,
+          e.event_type,
+          e.message,
+          e.payload
+        FROM public.geo_ops_script_events e
+        LEFT JOIN public.geo_ops_scripts s ON s.script_key = e.script_key
+        ORDER BY e.event_time DESC, e.event_id DESC
+        LIMIT 80
+        `,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          m.model_config_id,
+          m.provider_code,
+          r.display_name_cn AS provider_display_name_cn,
+          m.model_name,
+          m.display_name_cn,
+          m.model_role,
+          m.is_default,
+          m.is_active,
+          m.temperature,
+          m.thinking_mode,
+          m.dimensions,
+          m.base_url_override,
+          m.updated_at
+        FROM public.geo_ops_model_configs m
+        JOIN public.geo_ops_api_registry r ON r.provider_code = m.provider_code
+        ORDER BY m.model_role, m.provider_code, m.is_default DESC, m.model_name
+        `,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          c.credential_id,
+          c.provider_code,
+          r.display_name_cn AS provider_display_name_cn,
+          c.credential_name,
+          c.secret_ref,
+          c.secret_mask,
+          c.status,
+          c.is_default,
+          c.updated_at
+        FROM public.geo_ops_credentials c
+        JOIN public.geo_ops_api_registry r ON r.provider_code = c.provider_code
+        ORDER BY c.provider_code, c.is_default DESC, c.credential_name
+        `,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          rule_id,
+          provider_code,
+          rule_name,
+          period_seconds,
+          max_calls,
+          max_tokens,
+          max_estimated_cost,
+          hard_block,
+          is_enabled
+        FROM public.geo_ops_rate_limit_rules
+        ORDER BY is_enabled DESC, provider_code, period_seconds
+        `,
+      ),
     ]);
 
     res.status(200).json({
@@ -293,6 +584,22 @@ module.exports = async function handler(req, res) {
       visualPatterns,
       recentRuns,
       failedQueue,
+      ops: {
+        overview: opsOverviewRows[0],
+        apiStatusSummary,
+        apiUsage: {
+          hourly: apiUsageHourly,
+          daily: apiUsageDaily,
+          weekly: apiUsageWeekly,
+        },
+        modelUsageSummary,
+        scriptRunSummary,
+        recentScriptRuns,
+        scriptEvents,
+        modelConfigs,
+        credentials,
+        rateLimitRules,
+      },
     });
   } catch (error) {
     res.status(500).json({
