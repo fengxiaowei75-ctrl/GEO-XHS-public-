@@ -594,6 +594,8 @@ def watch_loop(conn, args):
 def main():
     args = enrich_args(parse_args())
     ops.configure_from_args(args)
+    if args.watch:
+        ops.cancel_stale_running_runs("watch_geo_note_ingest_queue")
     script_run_id = ops.start_script_run(
         "watch_geo_note_ingest_queue",
         trigger_type="watch" if args.watch else (os.environ.get("GEO_OPS_TRIGGER_TYPE") or "manual"),
@@ -614,6 +616,7 @@ def main():
                 payload={"count": count, "prompt_version": args.prompt_version},
             )
         if args.watch:
+            ops.install_signal_handlers(script_run_id)
             try:
                 watch_loop(conn, args)
             except KeyboardInterrupt:

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -37,6 +38,7 @@ SENSITIVE_MARKERS = (
 _DB_CONFIG = {}
 _CURRENT_SCRIPT_KEY = None
 _CURRENT_SCRIPT_RUN_ID = None
+_SIGNAL_HANDLERS_INSTALLED = False
 
 
 def load_env_file(path=None):
@@ -239,6 +241,57 @@ RETURNING script_run_id
         return None
     set_current_script_run(script_key, script_run_id)
     return script_run_id
+
+
+def cancel_stale_running_runs(script_key, reason="Superseded by a new service process."):
+    query = """
+UPDATE public.geo_ops_script_runs
+SET
+  status = 'canceled',
+  finished_at = now(),
+  duration_ms = GREATEST(0, (EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::integer),
+  error_message = %(reason)s,
+  updated_at = now()
+WHERE script_key = %(script_key)s
+  AND status = 'running'
+"""
+    try:
+        conn = db_connect()
+        if conn is None:
+            return 0
+        try:
+            with conn.cursor() as cur:
+                cur.execute(query, {"script_key": script_key, "reason": reason})
+                count = cur.rowcount or 0
+            conn.commit()
+            return count
+        finally:
+            conn.close()
+    except Exception as exc:
+        warn(f"cancel_stale_running_runs skipped: {exc}")
+        return 0
+
+
+def install_signal_handlers(script_run_id=None):
+    global _SIGNAL_HANDLERS_INSTALLED
+    if _SIGNAL_HANDLERS_INSTALLED:
+        return
+    script_run_id = script_run_id if script_run_id is not None else _CURRENT_SCRIPT_RUN_ID
+    if not script_run_id:
+        return
+
+    def handle(signum, _frame):
+        finish_script_run(
+            script_run_id,
+            status="canceled",
+            exit_code=128 + int(signum),
+            error_message=f"terminated by signal {signum}",
+        )
+        raise SystemExit(128 + int(signum))
+
+    signal.signal(signal.SIGTERM, handle)
+    signal.signal(signal.SIGINT, handle)
+    _SIGNAL_HANDLERS_INSTALLED = True
 
 
 def finish_script_run(
