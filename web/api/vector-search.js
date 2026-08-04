@@ -1,4 +1,5 @@
 const { Pool } = require("pg");
+const { requireAuth } = require("./_auth");
 
 let pool;
 
@@ -69,6 +70,9 @@ module.exports = async function handler(req, res) {
   }
 
   try {
+    const user = await requireAuth(req, res, "content");
+    if (!user) return;
+
     const { query, limit } = await readJsonBody(req);
     const embeddingUrl = process.env.EMBEDDING_API_URL || "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal";
     const embeddingKey = process.env.EMBEDDING_API_KEY;

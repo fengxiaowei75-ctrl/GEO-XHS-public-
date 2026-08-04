@@ -1,4 +1,5 @@
 const { Pool } = require("pg");
+const { permissionCatalog, requireAuth } = require("./_auth");
 
 let pool;
 
@@ -82,6 +83,26 @@ function getPool() {
 async function query(client, text, params = []) {
   const { rows } = await client.query(text, params);
   return rows;
+}
+
+function queryValue(req, key) {
+  if (req.query && req.query[key] !== undefined) return Array.isArray(req.query[key]) ? req.query[key][0] : req.query[key];
+  try {
+    const url = new URL(req.url || "", "http://localhost");
+    return url.searchParams.get(key);
+  } catch {
+    return "";
+  }
+}
+
+function parseApiDate(req) {
+  const value = String(queryValue(req, "apiDate") || "").trim();
+  if (!value) return "";
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+}
+
+function canAccess(user, permission) {
+  return Boolean(user && (user.role === "admin" || user.permissions?.[permission] === true));
 }
 
 function sampleData() {
@@ -284,12 +305,26 @@ function sampleData() {
 }
 
 module.exports = async function handler(req, res) {
-  res.setHeader("Cache-Control", "s-maxage=30, stale-while-revalidate=120");
+  res.setHeader("Cache-Control", "no-store");
 
   if (!hasDatabaseEnv()) {
     res.status(200).json(sampleData());
     return;
   }
+
+  let user;
+  try {
+    user = await requireAuth(req, res);
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ ok: false, error: error.message || "认证失败" });
+    return;
+  }
+  if (!user) return;
+
+  const apiDate = parseApiDate(req);
+  const apiDateParams = apiDate ? [apiDate] : [];
+  const apiDateWhere = apiDate ? "l.started_at >= $1::date AND l.started_at < $1::date + interval '1 day'" : "TRUE";
+  const apiDateJoin = apiDate ? "AND l.started_at >= $1::date AND l.started_at < $1::date + interval '1 day'" : "";
 
   const client = await getPool().connect();
   try {
@@ -361,27 +396,31 @@ module.exports = async function handler(req, res) {
         LEFT JOIN public.geo_ops_model_configs m ON m.model_config_id = l.model_config_id
         LEFT JOIN public.note_details n ON n.note_id = l.note_id
         LEFT JOIN public.geo_note_content_assets a ON a.note_id = l.note_id
+        WHERE ${apiDateWhere}
         ORDER BY l.started_at DESC, l.api_call_id DESC
         LIMIT 500
         `,
+        apiDateParams,
       ),
       query(
         client,
         `
         SELECT
-          provider_code,
-          status,
-          COALESCE(error_code, 'business_or_unknown') AS error_code,
-          COALESCE(NULLIF(error_message, ''), 'NULL_TEXT') AS error_message,
+          l.provider_code,
+          l.status,
+          COALESCE(l.error_code, 'business_or_unknown') AS error_code,
+          COALESCE(NULLIF(l.error_message, ''), 'NULL_TEXT') AS error_message,
           count(*)::int AS count,
-          min(started_at) AS first_started_at,
-          max(started_at) AS latest_started_at
-        FROM public.geo_ops_api_call_logs
-        WHERE status <> 'success'
-        GROUP BY provider_code, status, COALESCE(error_code, 'business_or_unknown'), COALESCE(NULLIF(error_message, ''), 'NULL_TEXT')
-        ORDER BY count DESC, provider_code
+          min(l.started_at) AS first_started_at,
+          max(l.started_at) AS latest_started_at
+        FROM public.geo_ops_api_call_logs l
+        WHERE l.status <> 'success'
+          AND ${apiDateWhere}
+        GROUP BY l.provider_code, l.status, COALESCE(l.error_code, 'business_or_unknown'), COALESCE(NULLIF(l.error_message, ''), 'NULL_TEXT')
+        ORDER BY count DESC, l.provider_code
         LIMIT 40
         `,
+        apiDateParams,
       ),
       query(
         client,
@@ -551,6 +590,7 @@ module.exports = async function handler(req, res) {
           max(l.started_at) AS latest_started_at
         FROM public.geo_ops_api_registry r
         LEFT JOIN public.geo_ops_api_call_logs l ON l.provider_code = r.provider_code
+          ${apiDateJoin}
         GROUP BY r.provider_code, r.display_name_cn, r.provider_type, r.billing_unit
         ORDER BY
           CASE r.provider_code
@@ -564,6 +604,7 @@ module.exports = async function handler(req, res) {
           calls_total DESC,
           r.provider_code
         `,
+        apiDateParams,
       ),
       query(
         client,
@@ -947,21 +988,12 @@ module.exports = async function handler(req, res) {
         endpoint_scripts: endpoint.scripts,
       };
     });
-
-    res.status(200).json({
-      source: "database",
-      generatedAt: new Date().toISOString(),
-      overview: overviewRows[0],
-      queueStatus,
-      topFresh,
-      personaDistribution,
-      funnelDistribution,
-      industryDistribution,
-      painMap,
-      visualPatterns,
-      recentRuns,
-      failedQueue,
-      ops: {
+    const canContent = canAccess(user, "content");
+    const canOps = canAccess(user, "ops");
+    const canModels = canAccess(user, "models");
+    const opsPayload = {};
+    if (canOps) {
+      Object.assign(opsPayload, {
         overview: opsOverviewRows[0],
         apiStatusSummary,
         recentApiCalls,
@@ -975,16 +1007,42 @@ module.exports = async function handler(req, res) {
         scriptRunSummary,
         recentScriptRuns,
         scriptEvents,
+        apiDateFilter: apiDate,
         endataBalance: {
           latestSnapshots: endataLatestSnapshots,
           endpoints: endataEndpoints,
           endpointHistory: enrichedEndataHistory,
           scriptUsageHourly: enrichedEndataScriptUsage,
         },
+      });
+    }
+    if (canModels) {
+      Object.assign(opsPayload, {
         modelConfigs,
         credentials,
         rateLimitRules,
+      });
+    }
+
+    res.status(200).json({
+      ok: true,
+      source: "database",
+      generatedAt: new Date().toISOString(),
+      auth: {
+        user,
+        permissions: permissionCatalog,
       },
+      overview: canContent ? overviewRows[0] : null,
+      queueStatus: canContent ? queueStatus : [],
+      topFresh: canContent ? topFresh : [],
+      personaDistribution: canContent ? personaDistribution : [],
+      funnelDistribution: canContent ? funnelDistribution : [],
+      industryDistribution: canContent ? industryDistribution : [],
+      painMap: canContent ? painMap : [],
+      visualPatterns: canContent ? visualPatterns : [],
+      recentRuns: canContent ? recentRuns : [],
+      failedQueue: canContent ? failedQueue : [],
+      ops: opsPayload,
     });
   } catch (error) {
     res.status(500).json({

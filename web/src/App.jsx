@@ -12,10 +12,14 @@ import {
   KeyRound,
   Layers3,
   ListChecks,
+  LogOut,
   RefreshCcw,
+  Save,
   Search,
+  Shield,
   Sparkles,
   Target,
+  UserPlus,
   Users,
   XCircle,
 } from "lucide-react";
@@ -39,9 +43,10 @@ const shortDateFormatter = new Intl.DateTimeFormat("zh-CN", {
 });
 
 const navItems = [
-  { id: "content", label: "内容资产", icon: Database },
-  { id: "ops", label: "运行监控", icon: Gauge },
-  { id: "models", label: "模型配置", icon: KeyRound },
+  { id: "content", label: "内容资产", icon: Database, permission: "content" },
+  { id: "ops", label: "运行监控", icon: Gauge, permission: "ops" },
+  { id: "models", label: "模型配置", icon: KeyRound, permission: "models" },
+  { id: "admin", label: "管理员配置", icon: Shield, permission: "admin" },
 ];
 
 const chartColors = ["#2764cf", "#087b76", "#a85e00", "#7153b8", "#bc3d3a", "#26814f"];
@@ -186,6 +191,14 @@ function deltaClass(value) {
   return "endata-delta-flat";
 }
 
+function canAccess(user, permission) {
+  return Boolean(user && (user.role === "admin" || user.permissions?.[permission] === true));
+}
+
+function firstAllowedView(user) {
+  return navItems.find((item) => canAccess(user, item.permission))?.id || "content";
+}
+
 function compactProviderLabel(value) {
   return String(value || "")
     .replace(/（.*?）/g, "")
@@ -267,6 +280,24 @@ function SelectControl({ value, onChange, options, label }) {
   );
 }
 
+async function requestJson(path, options = {}) {
+  const response = await fetch(path, {
+    credentials: "include",
+    ...options,
+    headers: {
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {}),
+    },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(payload.error || payload.message || `HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  return payload;
+}
+
 function SegmentedControl({ value, onChange, options }) {
   return (
     <div className="segmented-control">
@@ -322,6 +353,13 @@ function padDatePart(value) {
 function localDateTimeString(value) {
   const date = new Date(value);
   return `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}T${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}:00`;
+}
+
+function localDateInputValue(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`;
 }
 
 function normalizeBucketStart(value, range) {
@@ -1027,6 +1065,52 @@ function EndataBalancePanel({ endata }) {
   );
 }
 
+function LoginScreen({ onLogin, loading, error }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    await onLogin(username.trim(), password);
+  }
+
+  return (
+    <main className="login-screen">
+      <form className="login-card" onSubmit={handleSubmit}>
+        <div className="brand-block login-brand">
+          <div className="brand-icon">
+            <Sparkles size={18} />
+          </div>
+          <div>
+            <strong>GEO XHS</strong>
+            <span>Intelligence</span>
+          </div>
+        </div>
+        <div className="login-form">
+          <label>
+            <span>账号</span>
+            <input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} required />
+          </label>
+          <label>
+            <span>密码</span>
+            <input
+              autoComplete="current-password"
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              required
+            />
+          </label>
+          <button className="primary-button" disabled={loading} type="submit">
+            登录
+          </button>
+          {error ? <div className="login-error">{error}</div> : null}
+        </div>
+      </form>
+    </main>
+  );
+}
+
 function DashboardTable({ rows }) {
   return (
     <div className="table-wrap">
@@ -1221,7 +1305,7 @@ function ContentDashboard({ data, loading, filter }) {
   );
 }
 
-function OpsDashboard({ data }) {
+function OpsDashboard({ data, apiDate, onApiDateChange }) {
   const [range, setRange] = useState("daily");
   const [provider, setProvider] = useState("all");
   const [model, setModel] = useState("all");
@@ -1233,6 +1317,20 @@ function OpsDashboard({ data }) {
   const ops = data?.ops || {};
   const endataBalance = ops.endataBalance || {};
   const apiRows = ops.apiStatusSummary || [];
+  const apiDateOptions = useMemo(() => {
+    const days = new Map();
+    (ops.apiUsage?.daily || []).forEach((item) => {
+      const date = localDateInputValue(item.bucket_start);
+      if (!date) return;
+      days.set(date, Number(days.get(date) || 0) + Number(item.calls_total || 0));
+    });
+    return [
+      { value: "", label: "累计" },
+      ...Array.from(days.entries())
+        .sort((a, b) => b[0].localeCompare(a[0]))
+        .map(([date, count]) => ({ value: date, label: `${date} · ${formatCompact(count)}次` })),
+    ];
+  }, [ops.apiUsage]);
   const providerLabelByCode = useMemo(() => new Map(apiRows.map((item) => [item.provider_code, providerDisplayName(item)])), [apiRows]);
   const recentApiRows = (ops.recentApiCalls || []).map((item) => ({
     ...item,
@@ -1415,7 +1513,11 @@ function OpsDashboard({ data }) {
 
       <section className="ops-grid ops-grid-uneven">
         <section className="panel ops-equal-panel api-overview-panel">
-          <SectionHeader icon={Activity} title="API 调用概况" />
+          <SectionHeader
+            icon={Activity}
+            title="API 调用概况"
+            action={<SelectControl value={apiDate || ""} onChange={onApiDateChange} options={apiDateOptions} label="日期" />}
+          />
           <ApiStatusComboChart
             rows={apiRows}
             selectedProvider={detailProvider}
@@ -1662,25 +1764,330 @@ function ModelConfigView({ data }) {
   );
 }
 
+function emptyUserForm(permissionCatalog = {}) {
+  return {
+    user_id: "",
+    username: "",
+    password: "",
+    role: "viewer",
+    active: true,
+    permissions: Object.fromEntries(Object.keys(permissionCatalog).map((key) => [key, key === "content" || key === "ops"])),
+  };
+}
+
+function AdminConfigView({ currentUser, permissionCatalog }) {
+  const [users, setUsers] = useState([]);
+  const [form, setForm] = useState(() => emptyUserForm(permissionCatalog));
+  const [loadingUsers, setLoadingUsers] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const permissionEntries = Object.entries(permissionCatalog || {});
+
+  async function loadUsers() {
+    setLoadingUsers(true);
+    setMessage("");
+    try {
+      const payload = await requestJson("/api/admin/users");
+      setUsers(payload.users || []);
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setLoadingUsers(false);
+    }
+  }
+
+  useEffect(() => {
+    loadUsers();
+  }, []);
+
+  useEffect(() => {
+    setForm((current) => {
+      const merged = { ...emptyUserForm(permissionCatalog), ...current };
+      merged.permissions = { ...emptyUserForm(permissionCatalog).permissions, ...(current.permissions || {}) };
+      return merged;
+    });
+  }, [permissionCatalog]);
+
+  function resetForm() {
+    setForm(emptyUserForm(permissionCatalog));
+    setMessage("");
+  }
+
+  function editUser(user) {
+    setForm({
+      user_id: user.user_id,
+      username: user.username || "",
+      password: "",
+      role: user.role || "viewer",
+      active: user.active !== false,
+      permissions: { ...emptyUserForm(permissionCatalog).permissions, ...(user.permissions || {}) },
+    });
+    setMessage(`正在编辑 ${user.username}`);
+  }
+
+  function updateForm(patch) {
+    setForm((current) => ({ ...current, ...patch }));
+  }
+
+  function updateRole(role) {
+    setForm((current) => ({
+      ...current,
+      role,
+      permissions: role === "admin" ? Object.fromEntries(permissionEntries.map(([key]) => [key, true])) : current.permissions,
+    }));
+  }
+
+  function updatePermission(key, checked) {
+    setForm((current) => ({
+      ...current,
+      permissions: { ...(current.permissions || {}), [key]: checked },
+    }));
+  }
+
+  async function save(event) {
+    event.preventDefault();
+    setSaving(true);
+    setMessage("");
+    try {
+      const payload = {
+        user_id: form.user_id || null,
+        username: form.username.trim(),
+        password: form.password,
+        role: form.role,
+        active: form.active,
+        permissions: form.permissions,
+      };
+      const result = await requestJson("/api/admin/users", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      setUsers(result.users || []);
+      setMessage("已保存");
+      if (!form.user_id) resetForm();
+      else updateForm({ password: "" });
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <section className="stats-grid stats-grid-three">
+        <Stat icon={Users} label="账号数量" value={formatNumber(users.length)} sub={loadingUsers ? "加载中" : "dashboard_users"} />
+        <Stat
+          icon={Shield}
+          label="管理员"
+          value={formatNumber(users.filter((user) => user.role === "admin").length)}
+          sub={`当前 ${currentUser?.username || "-"}`}
+          tone="teal"
+        />
+        <Stat
+          icon={KeyRound}
+          label="权限项"
+          value={formatNumber(permissionEntries.length)}
+          sub="页面级访问控制"
+          tone="amber"
+        />
+      </section>
+
+      <section className="admin-layout">
+        <section className="panel">
+          <SectionHeader
+            icon={form.user_id ? Save : UserPlus}
+            title={form.user_id ? "更新账号" : "创建账号"}
+            action={
+              <button className="copy-button" onClick={resetForm} type="button">
+                新建
+              </button>
+            }
+          />
+          <form className="admin-form" onSubmit={save}>
+            <label>
+              <span>账号</span>
+              <input value={form.username} onChange={(event) => updateForm({ username: event.target.value })} required />
+            </label>
+            <label>
+              <span>{form.user_id ? "新密码" : "密码"}</span>
+              <input
+                type="password"
+                value={form.password}
+                onChange={(event) => updateForm({ password: event.target.value })}
+                placeholder={form.user_id ? "留空不修改" : ""}
+                required={!form.user_id}
+              />
+            </label>
+            <div className="admin-form-row">
+              <label>
+                <span>角色</span>
+                <select value={form.role} onChange={(event) => updateRole(event.target.value)}>
+                  <option value="viewer">viewer</option>
+                  <option value="admin">admin</option>
+                </select>
+              </label>
+              <label className="admin-check">
+                <input checked={form.active} onChange={(event) => updateForm({ active: event.target.checked })} type="checkbox" />
+                启用
+              </label>
+            </div>
+            <div className="permission-grid">
+              {permissionEntries.map(([key, label]) => (
+                <label key={key} className={form.role === "admin" ? "disabled" : ""}>
+                  <input
+                    checked={form.role === "admin" || Boolean(form.permissions?.[key])}
+                    disabled={form.role === "admin"}
+                    onChange={(event) => updatePermission(key, event.target.checked)}
+                    type="checkbox"
+                  />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </div>
+            <button className="primary-button" disabled={saving} type="submit">
+              保存账号
+            </button>
+            {message ? <div className="admin-message">{message}</div> : null}
+          </form>
+        </section>
+
+        <section className="panel panel-table">
+          <SectionHeader icon={Users} title="账号列表" />
+          <div className="table-wrap">
+            <table className="admin-user-table">
+              <thead>
+                <tr>
+                  <th>账号</th>
+                  <th>角色</th>
+                  <th>状态</th>
+                  <th>权限</th>
+                  <th>最近登录</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((user) => (
+                  <tr key={user.user_id}>
+                    <td>
+                      <div className="note-title">{user.username}</div>
+                      <div className="note-meta">#{user.user_id}</div>
+                    </td>
+                    <td>{user.role}</td>
+                    <td>
+                      <StatusPill tone={user.active ? "green" : "neutral"}>{user.active ? "active" : "disabled"}</StatusPill>
+                    </td>
+                    <td>
+                      <div className="admin-perm-tags">
+                        {permissionEntries
+                          .filter(([key]) => user.role === "admin" || user.permissions?.[key])
+                          .map(([key, label]) => (
+                            <span key={`${user.user_id}-${key}`}>{label}</span>
+                          ))}
+                      </div>
+                    </td>
+                    <td>{formatDateTimeSecond(user.last_login_at)}</td>
+                    <td>
+                      <button className="copy-button" onClick={() => editUser(user)} type="button">
+                        编辑
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {!users.length ? (
+                  <tr>
+                    <td colSpan="6">{loadingUsers ? "加载中" : "暂无账号"}</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </>
+  );
+}
+
 export default function App() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [loginLoading, setLoginLoading] = useState(false);
   const [error, setError] = useState("");
+  const [loginError, setLoginError] = useState("");
   const [filter, setFilter] = useState("");
   const [activeView, setActiveView] = useState("content");
+  const [apiDate, setApiDate] = useState("");
+  const [currentUser, setCurrentUser] = useState(null);
+  const [permissionCatalog, setPermissionCatalog] = useState({});
+
+  async function loadSession() {
+    setAuthLoading(true);
+    try {
+      const payload = await requestJson("/api/me");
+      setPermissionCatalog(payload.permissions || {});
+      if (payload.authenticated && payload.user) {
+        setCurrentUser(payload.user);
+        setActiveView((current) => (canAccess(payload.user, navItems.find((item) => item.id === current)?.permission) ? current : firstAllowedView(payload.user)));
+      } else {
+        setCurrentUser(null);
+        setData(null);
+      }
+    } catch (err) {
+      setCurrentUser(null);
+      setLoginError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function handleLogin(username, password) {
+    setLoginLoading(true);
+    setLoginError("");
+    try {
+      const payload = await requestJson("/api/login", {
+        method: "POST",
+        body: JSON.stringify({ username, password }),
+      });
+      setPermissionCatalog(payload.permissions || {});
+      setCurrentUser(payload.user);
+      setActiveView(firstAllowedView(payload.user));
+    } catch (err) {
+      setLoginError(err.message);
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await requestJson("/api/logout", { method: "POST", body: JSON.stringify({}) });
+    } catch {
+      // Local state still needs clearing even if the session was already expired.
+    }
+    setCurrentUser(null);
+    setData(null);
+    setError("");
+    setLoginError("");
+  }
 
   async function loadDashboard(options = {}) {
+    if (!currentUser) return;
     const isBackground = Boolean(options.background);
     if (!isBackground) {
       setLoading(true);
       setError("");
     }
     try {
-      const response = await fetch("/api/dashboard");
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.message || "dashboard request failed");
+      const selectedApiDate = options.apiDateOverride ?? apiDate;
+      const query = selectedApiDate ? `?apiDate=${encodeURIComponent(selectedApiDate)}` : "";
+      const payload = await requestJson(`/api/dashboard${query}`);
       setData(payload);
     } catch (err) {
+      if (err.status === 401) {
+        setCurrentUser(null);
+        setData(null);
+        return;
+      }
       setData((current) => current || sampleDashboard);
       if (!isBackground && !String(err.message || "").includes("Unexpected token '<'")) {
         setError(`使用样例数据预览：${err.message}`);
@@ -1691,13 +2098,43 @@ export default function App() {
   }
 
   useEffect(() => {
+    loadSession();
+  }, []);
+
+  useEffect(() => {
+    if (!currentUser) return undefined;
     loadDashboard();
     const timer = window.setInterval(() => loadDashboard({ background: true }), 30000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [currentUser?.user_id, apiDate]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const item = navItems.find((navItem) => navItem.id === activeView);
+    if (!item || !canAccess(currentUser, item.permission)) {
+      setActiveView(firstAllowedView(currentUser));
+    }
+  }, [activeView, currentUser]);
+
+  function handleApiDateChange(value) {
+    setApiDate(value);
+  }
 
   const isSample = data?.source === "sample";
-  const activeTitle = navItems.find((item) => item.id === activeView)?.label || "内容资产";
+  const allowedNavItems = navItems.filter((item) => canAccess(currentUser, item.permission));
+  const activeTitle = allowedNavItems.find((item) => item.id === activeView)?.label || allowedNavItems[0]?.label || "GEO XHS";
+
+  if (authLoading) {
+    return (
+      <main className="login-screen">
+        <div className="loading">加载中</div>
+      </main>
+    );
+  }
+
+  if (!currentUser) {
+    return <LoginScreen onLogin={handleLogin} loading={loginLoading} error={loginError} />;
+  }
 
   return (
     <>
@@ -1713,7 +2150,7 @@ export default function App() {
             </div>
           </div>
           <nav>
-            {navItems.map((item) => {
+            {allowedNavItems.map((item) => {
               const Icon = item.icon;
               return (
                 <button key={item.id} className={activeView === item.id ? "active" : ""} onClick={() => setActiveView(item.id)} type="button">
@@ -1735,6 +2172,9 @@ export default function App() {
               <h1>{activeTitle}</h1>
             </div>
             <div className="toolbar">
+              <span className="user-chip">
+                {currentUser.username} · {currentUser.role}
+              </span>
               {activeView === "content" ? (
                 <div className="search-box">
                   <Search size={16} />
@@ -1743,6 +2183,9 @@ export default function App() {
               ) : null}
               <button className="icon-button" onClick={loadDashboard} disabled={loading} title="刷新数据" type="button">
                 <RefreshCcw size={17} />
+              </button>
+              <button className="icon-button" onClick={handleLogout} title="退出登录" type="button">
+                <LogOut size={17} />
               </button>
             </div>
           </header>
@@ -1762,8 +2205,9 @@ export default function App() {
           ) : null}
 
           {activeView === "content" ? <ContentDashboard data={data} loading={loading} filter={filter} /> : null}
-          {activeView === "ops" ? <OpsDashboard data={data} /> : null}
+          {activeView === "ops" ? <OpsDashboard data={data} apiDate={apiDate} onApiDateChange={handleApiDateChange} /> : null}
           {activeView === "models" ? <ModelConfigView data={data} /> : null}
+          {activeView === "admin" ? <AdminConfigView currentUser={currentUser} permissionCatalog={permissionCatalog} /> : null}
         </main>
       </div>
       <ChatWidget />

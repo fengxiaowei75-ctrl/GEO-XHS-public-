@@ -1,4 +1,5 @@
 const { Pool } = require("pg");
+const { requireAuth } = require("./_auth");
 
 const ALLOWED_PREFIXES = ["SELECT", "WITH"];
 const DANGEROUS_KEYWORDS = [
@@ -106,6 +107,9 @@ module.exports = async function handler(req, res) {
   }
 
   try {
+    const user = await requireAuth(req, res, "admin");
+    if (!user) return;
+
     const { sql, params } = await readJsonBody(req);
 
     if (!sql || typeof sql !== "string") {

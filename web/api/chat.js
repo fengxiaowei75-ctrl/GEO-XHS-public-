@@ -1,4 +1,5 @@
 const DEFAULT_COZE_API_BASE = "https://api.coze.cn";
+const { requireAuth } = require("./_auth");
 
 async function readJsonBody(req) {
   if (req.body && typeof req.body === "object") return req.body;
@@ -27,6 +28,9 @@ module.exports = async function handler(req, res) {
   }
 
   try {
+    const user = await requireAuth(req, res);
+    if (!user) return;
+
     const { message, conversationId, userId } = await readJsonBody(req);
     const token = process.env.COZE_API_TOKEN;
     const botId = process.env.COZE_BOT_ID || "your_coze_bot_id";
