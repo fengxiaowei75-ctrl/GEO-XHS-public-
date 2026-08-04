@@ -81,14 +81,15 @@ function renderMarkdown(text: string): string {
   return html.replace(/\n/g, "<br/>");
 }
 
-function extractCozeDelta(data: Record<string, unknown>) {
+function extractCozeDelta(data: Record<string, unknown>, eventName: string) {
   const content = typeof data.content === "string" ? data.content : "";
   const type = typeof data.type === "string" ? data.type : "";
-  const event = typeof data.event === "string" ? data.event : "";
+  const event = eventName || (typeof data.event === "string" ? data.event : "");
 
   if (!content) return "";
-  if (type === "answer" || type === "tool_response") return content;
-  if (event.includes("message.delta") || event.includes("message.completed")) return content;
+  if (event.includes("message.delta")) return content;
+  if (event) return "";
+  if (!event && (type === "answer" || type === "tool_response")) return content;
   return "";
 }
 
@@ -149,6 +150,7 @@ export function ChatWidget() {
 
       const decoder = new TextDecoder();
       let buffer = "";
+      let currentEvent = "";
 
       while (true) {
         const { done, value } = await reader.read();
@@ -159,7 +161,12 @@ export function ChatWidget() {
         buffer = lines.pop() || "";
 
         for (const line of lines) {
-          if (!line.trim() || !line.startsWith("data:")) continue;
+          if (!line.trim()) continue;
+          if (line.startsWith("event:")) {
+            currentEvent = line.slice(6).trim();
+            continue;
+          }
+          if (!line.startsWith("data:")) continue;
           const dataStr = line.slice(5).trim();
           if (!dataStr || dataStr === "[DONE]") continue;
 
@@ -169,7 +176,7 @@ export function ChatWidget() {
               setConversationId(data.conversation_id);
             }
 
-            const delta = extractCozeDelta(data);
+            const delta = extractCozeDelta(data, currentEvent);
             if (delta) {
               setMessages((prev) => {
                 const updated = [...prev];
