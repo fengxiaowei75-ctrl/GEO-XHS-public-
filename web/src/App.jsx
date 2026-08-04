@@ -221,36 +221,6 @@ function noteDateKey(item) {
   return dateKeyFromValue(item?.note_date || item?.publish_time);
 }
 
-function buildWordCloudTerms(rows, extractTerms) {
-  const termMap = new Map();
-  rows.forEach((item) => {
-    const terms = extractTerms(item)
-      .map((value) => String(value || "").trim())
-      .filter((value) => value && value !== "未标注");
-    Array.from(new Set(terms)).forEach((term) => {
-      const current = termMap.get(term) || { term, count: 0, interaction: 0 };
-      current.count += 1;
-      current.interaction += Number(item.interaction_score || 0);
-      termMap.set(term, current);
-    });
-  });
-  const ranked = Array.from(termMap.values())
-    .map((item) => ({
-      ...item,
-      score: item.count * 10 + Math.log10(Math.max(1, item.interaction) + 1) * 3,
-    }))
-    .sort((a, b) => b.score - a.score || b.count - a.count || a.term.localeCompare(b.term, "zh-CN"))
-    .slice(0, 36);
-  const scores = ranked.map((item) => item.score);
-  const min = Math.min(...scores, 0);
-  const max = Math.max(...scores, 1);
-  return ranked.map((item, index) => ({
-    ...item,
-    size: 13 + ((item.score - min) / Math.max(1, max - min)) * 19,
-    rank: index + 1,
-  }));
-}
-
 function statusTone(status) {
   if (status === "success" || status === "active" || status === true) return "green";
   if (status === "running") return "blue";
@@ -1880,38 +1850,128 @@ function NoteAnalysisBoard({ note, onClose }) {
   );
 }
 
-function WordCloudBox({ title, caption, terms, tone }) {
+function clusterNotePayload(item) {
+  return {
+    note_id: item.note_id,
+    title: item.title,
+    content_excerpt: noteContentText(item),
+    core_topic_category: item.core_topic_category,
+    note_type: item.note_type,
+    primary_target_persona: item.primary_target_persona,
+    true_pain_label: item.true_pain_label,
+    pain_description: item.pain_description,
+    hook_types: listItems(item.hook_types),
+    business_logic: item.business_logic,
+    content_logic: item.content_logic,
+    reusable_angles_preview: firstStructuredText(item.reusable_angles),
+    interaction_score: Number(item.interaction_score || 0),
+    like_count: Number(item.like_count || 0),
+    collected_count: Number(item.collected_count || 0),
+    comments_count: Number(item.comments_count || 0),
+  };
+}
+
+function clusterCacheKey(rows, persona, rangeLabel) {
+  const noteKey = rows
+    .slice()
+    .sort((a, b) => Number(b.interaction_score || 0) - Number(a.interaction_score || 0))
+    .slice(0, 80)
+    .map((item) => `${item.note_id}:${item.interaction_score || 0}`)
+    .join("|");
+  return `geo_cluster_map:${rangeLabel}:${persona || "all"}:${noteKey}`;
+}
+
+function localMindMapFromRows(rows, persona) {
+  const groups = new Map();
+  rows.forEach((item) => {
+    const name = item.core_topic_category || item.note_type || "未标注主题";
+    const current = groups.get(name) || { name, notes: [], interaction: 0 };
+    current.notes.push(item);
+    current.interaction += Number(item.interaction_score || 0);
+    groups.set(name, current);
+  });
+  const clusters = Array.from(groups.values())
+    .sort((a, b) => b.interaction - a.interaction)
+    .slice(0, 6)
+    .map((group, index) => {
+      const topNote = group.notes.sort((a, b) => Number(b.interaction_score || 0) - Number(a.interaction_score || 0))[0] || {};
+      return {
+        id: `local_${index + 1}`,
+        name: group.name,
+        insight: topNote.content_logic || topNote.business_logic || "本类内容围绕同一主题反复教育用户认知。",
+        anxiety: topNote.true_pain_label || topNote.pain_description || "用户焦虑点待补充",
+        what_marketers_say: topNote.core_topic_category || group.name,
+        recommended_action: topNote.business_logic || "可沉淀为选题方向，并结合高互动笔记做脚本拆解。",
+        weight: Math.min(100, Math.round(Math.log10(group.interaction + 10) * 25)),
+        note_ids: group.notes.slice(0, 5).map((item) => item.note_id),
+        children: [
+          { id: `${index + 1}_pain`, name: "用户焦虑", insight: topNote.true_pain_label || topNote.pain_description || "-", weight: 80 },
+          { id: `${index + 1}_reuse`, name: "复用角度", insight: firstStructuredText(topNote.reusable_angles, topNote.business_logic || "-"), weight: 70 },
+        ],
+      };
+    });
+  return {
+    title: `${persona || "全部人群"}内容自然聚类`,
+    summary: `基于当前周期 ${formatNumber(rows.length)} 条笔记生成的本地预览。线上点击会调用内容总结大模型生成更自然的聚类。`,
+    clusters,
+  };
+}
+
+function ClusterMindMap({ mindMap }) {
+  if (!mindMap?.clusters?.length) return <div className="empty-state cluster-empty">暂无聚类导图</div>;
   return (
-    <section className={`word-cloud-box word-cloud-${tone || "blue"}`}>
-      <div className="word-cloud-head">
-        <div>
-          <span>{caption}</span>
-          <h3>{title}</h3>
-        </div>
-        <StatusPill tone="neutral">{formatNumber(terms.length)} 个词</StatusPill>
+    <div className="cluster-map">
+      <div className="cluster-root-node">
+        <span>自然聚类</span>
+        <strong>{mindMap.title || "内容聚类导图"}</strong>
+        <p>{mindMap.summary || "-"}</p>
       </div>
-      {terms.length ? (
-        <div className="word-cloud-canvas">
-          {terms.map((item) => (
-            <span
-              className={`word-cloud-term rank-${Math.min(5, Math.ceil(item.rank / 4))}`}
-              key={item.term}
-              style={{ "--term-size": `${item.size}px` }}
-              title={`${item.term}：${item.count} 篇，互动 ${formatNumber(item.interaction)}`}
-            >
-              {item.term}
-              <em>{item.count}</em>
-            </span>
-          ))}
-        </div>
-      ) : (
-        <div className="empty-state word-cloud-empty">暂无可聚合词</div>
-      )}
-    </section>
+      <div className="cluster-branch-list">
+        {mindMap.clusters.map((cluster, index) => (
+          <article className="cluster-branch" key={cluster.id || `${cluster.name}-${index}`}>
+            <div className="cluster-branch-card">
+              <div className="cluster-branch-head">
+                <span>#{index + 1}</span>
+                <strong>{cluster.name}</strong>
+                <em>{Math.round(Number(cluster.weight || 0))}</em>
+              </div>
+              <p>{cluster.insight || "-"}</p>
+              <div className="cluster-branch-grid">
+                <section>
+                  <h3>用户焦虑</h3>
+                  <p>{cluster.anxiety || "-"}</p>
+                </section>
+                <section>
+                  <h3>营销号在讲</h3>
+                  <p>{cluster.what_marketers_say || "-"}</p>
+                </section>
+                <section>
+                  <h3>运营动作</h3>
+                  <p>{cluster.recommended_action || "-"}</p>
+                </section>
+              </div>
+              <div className="cluster-note-ids">
+                {(cluster.note_ids || []).slice(0, 5).map((noteId) => (
+                  <span key={noteId}>{noteId}</span>
+                ))}
+              </div>
+            </div>
+            <div className="cluster-child-list">
+              {(cluster.children || []).map((child) => (
+                <div className="cluster-child" key={child.id || child.name}>
+                  <strong>{child.name}</strong>
+                  <p>{child.insight || "-"}</p>
+                </div>
+              ))}
+            </div>
+          </article>
+        ))}
+      </div>
+    </div>
   );
 }
 
-function WordCloudPanel({ rows, personas, selectedPersona, onPersonaChange }) {
+function NaturalClusterPanel({ rows, personas, selectedPersona, onPersonaChange, rangeLabel, source }) {
   const personaOptions = useMemo(
     () => [
       { value: "", label: "全部人群" },
@@ -1926,40 +1986,109 @@ function WordCloudPanel({ rows, personas, selectedPersona, onPersonaChange }) {
     () => (selectedPersona ? rows.filter((item) => (item.primary_target_persona || "未标注") === selectedPersona) : rows),
     [rows, selectedPersona],
   );
-  const emotionTerms = useMemo(
-    () =>
-      buildWordCloudTerms(scopedRows, (item) => [
-        ...listItems(item.hook_types),
-        item.true_pain_label,
-      ]),
-    [scopedRows],
-  );
-  const topicTerms = useMemo(
-    () =>
-      buildWordCloudTerms(scopedRows, (item) => [
-        item.core_topic_category || item.note_type,
-      ]),
-    [scopedRows],
-  );
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [meta, setMeta] = useState(null);
+  const cacheKey = useMemo(() => clusterCacheKey(scopedRows, selectedPersona, rangeLabel), [scopedRows, selectedPersona, rangeLabel]);
+
+  useEffect(() => {
+    setError("");
+    setMeta(null);
+    try {
+      const cached = window.localStorage.getItem(cacheKey);
+      const parsed = cached ? JSON.parse(cached) : null;
+      setResult(parsed);
+      if (parsed) setMeta({ cached: true, generatedAt: parsed.generatedAt, model: parsed.model, noteCount: parsed.noteCount, latencyMs: parsed.latencyMs });
+    } catch {
+      setResult(null);
+    }
+  }, [cacheKey]);
+
+  async function generateMindMap() {
+    setLoading(true);
+    setError("");
+    try {
+      if (source === "sample") {
+        const mindMap = localMindMapFromRows(scopedRows, selectedPersona || "全部人群");
+        const next = { mindMap, generatedAt: new Date().toISOString(), model: "local-preview", noteCount: scopedRows.length };
+        setResult(next);
+        setMeta({ cached: false, generatedAt: next.generatedAt, model: next.model, noteCount: scopedRows.length });
+        try {
+          window.localStorage.setItem(cacheKey, JSON.stringify(next));
+        } catch {
+          // 缓存失败不影响本次导图展示。
+        }
+        return;
+      }
+      const notes = scopedRows
+        .slice()
+        .sort((a, b) => Number(b.interaction_score || 0) - Number(a.interaction_score || 0))
+        .slice(0, 80)
+        .map(clusterNotePayload);
+      const payload = await requestJson("/api/content-cluster", {
+        method: "POST",
+        body: JSON.stringify({
+          rangeLabel,
+          persona: selectedPersona,
+          notes,
+          forceRefresh: true,
+        }),
+      });
+      const next = {
+        mindMap: payload.mindMap,
+        generatedAt: payload.generatedAt,
+        model: payload.model,
+        noteCount: payload.noteCount,
+        latencyMs: payload.latencyMs,
+      };
+      setResult(next);
+      setMeta({ cached: false, generatedAt: payload.generatedAt, model: payload.model, noteCount: payload.noteCount, latencyMs: payload.latencyMs });
+      try {
+        window.localStorage.setItem(cacheKey, JSON.stringify(next));
+      } catch {
+        // 缓存失败不影响本次导图展示。
+      }
+    } catch (err) {
+      setError(err.message || "聚类导图生成失败");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
-    <section className="panel word-cloud-panel">
+    <section className="panel cluster-panel">
       <SectionHeader
         icon={Brain}
-        title="周期词云洞察"
+        title="自然聚类思维导图"
         action={<SelectControl label="人群筛选" value={selectedPersona} onChange={onPersonaChange} options={personaOptions} />}
       />
-      <div className="word-cloud-grid">
-        <WordCloudBox title="情绪钩子词云" caption="用户在焦虑什么" terms={emotionTerms} tone="red" />
-        <WordCloudBox title="笔记类型词云" caption="营销号在讲什么" terms={topicTerms} tone="blue" />
+      <div className="cluster-toolbar">
+        <div>
+          <strong>{selectedPersona || "全部人群"}</strong>
+          <span>{rangeLabel} · {formatNumber(scopedRows.length)} 条笔记 · 最多发送互动最高的 80 条给模型</span>
+        </div>
+        <button className="primary-button cluster-generate-button" disabled={loading || !scopedRows.length} onClick={generateMindMap} type="button">
+          {loading ? "生成中..." : result ? "重新生成导图" : "生成聚类导图"}
+        </button>
       </div>
+      {meta ? (
+        <div className="cluster-meta">
+          <span>{meta.cached ? "已显示浏览器缓存结果" : "最新模型结果"}</span>
+          <span>{meta.model || "content model"}</span>
+          {meta.latencyMs ? <span>{formatDuration(meta.latencyMs)}</span> : null}
+          {meta.generatedAt ? <span>{formatDate(meta.generatedAt)}</span> : null}
+        </div>
+      ) : null}
+      {error ? <div className="login-error cluster-error">{error}</div> : null}
+      {loading && !result ? <div className="loading cluster-loading">大模型正在做自然聚类</div> : <ClusterMindMap mindMap={result?.mindMap} />}
     </section>
   );
 }
 
 function ContentDashboard({ data, loading, filter, contentStart, contentEnd, onContentRangeApply }) {
   const [selectedPersona, setSelectedPersona] = useState("");
-  const [wordCloudPersona, setWordCloudPersona] = useState("");
+  const [clusterPersona, setClusterPersona] = useState("");
   const [selectedTrendDate, setSelectedTrendDate] = useState("");
   const [selectedNoteId, setSelectedNoteId] = useState("");
   const [draftStart, setDraftStart] = useState(contentStart || "");
@@ -1985,10 +2114,10 @@ function ContentDashboard({ data, loading, filter, contentStart, contentEnd, onC
   }, [personaRows, selectedPersona]);
 
   useEffect(() => {
-    if (!wordCloudPersona) return;
-    const exists = personaRows.some((item) => (item.primary_target_persona || "未标注") === wordCloudPersona);
-    if (!exists) setWordCloudPersona("");
-  }, [personaRows, wordCloudPersona]);
+    if (!clusterPersona) return;
+    const exists = personaRows.some((item) => (item.primary_target_persona || "未标注") === clusterPersona);
+    if (!exists) setClusterPersona("");
+  }, [personaRows, clusterPersona]);
 
   const trendDateKeys = useMemo(() => trendRows.map((item) => dateKeyFromValue(item.bucket_date)).filter(Boolean), [trendRows]);
 
@@ -2112,11 +2241,13 @@ function ContentDashboard({ data, loading, filter, contentStart, contentEnd, onC
           ))}
         </section>
 
-        <WordCloudPanel
+        <NaturalClusterPanel
           rows={noteRows}
           personas={personaRows}
-          selectedPersona={wordCloudPersona}
-          onPersonaChange={setWordCloudPersona}
+          selectedPersona={clusterPersona}
+          onPersonaChange={setClusterPersona}
+          rangeLabel={activeRangeLabel}
+          source={data?.source}
         />
 
         <section className="panel content-trend-panel">
