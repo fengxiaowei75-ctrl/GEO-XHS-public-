@@ -101,6 +101,12 @@ function parseApiDate(req) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
 }
 
+function parseDateParam(req, key) {
+  const value = String(queryValue(req, key) || "").trim();
+  if (!value) return "";
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+}
+
 function canAccess(user, permission) {
   return Boolean(user && (user.role === "admin" || user.permissions?.[permission] === true));
 }
@@ -118,6 +124,56 @@ function sampleData() {
       contentAssetFailedRuns: 6,
       minPublishTime: "2024-11-08T00:00:00.000Z",
       maxPublishTime: "2026-07-31T00:00:00.000Z",
+    },
+    contentInsight: {
+      range: {
+        start: "",
+        end: "",
+        minCapturedAt: "2026-08-01T00:00:00.000Z",
+        maxCapturedAt: "2026-08-04T00:00:00.000Z",
+      },
+      overview: {
+        noteTotal: 90,
+        interactionTotal: 128460,
+        likeTotal: 82400,
+        collectedTotal: 28600,
+        commentsTotal: 8740,
+        minCapturedAt: "2026-08-01T00:00:00.000Z",
+        maxCapturedAt: "2026-08-04T00:00:00.000Z",
+      },
+      topicFrequency: [
+        { core_topic_category: "GEO避坑", note_count: 24, share_pct: 26.67 },
+        { core_topic_category: "AI搜索优化", note_count: 19, share_pct: 21.11 },
+        { core_topic_category: "品牌流量增长", note_count: 16, share_pct: 17.78 },
+      ],
+      personaDistribution: [
+        { primary_target_persona: "垂直探路者", note_count: 36, share_pct: 40 },
+        { primary_target_persona: "行业焦虑决策者", note_count: 28, share_pct: 31.11 },
+        { primary_target_persona: "行业观望者", note_count: 18, share_pct: 20 },
+      ],
+      noteAnalysis: [
+        {
+          note_id: "6a1ba9a10000000006031daa",
+          title: "每天拆解一个运营知识-GEO排名优化",
+          author_nickname: "GEO增长研究所",
+          captured_at: "2026-08-04T00:00:00.000Z",
+          publish_time: "2026-05-31T00:00:00.000Z",
+          note_type: "图文",
+          core_topic_category: "GEO避坑",
+          primary_target_persona: "垂直探路者",
+          like_count: 612,
+          collected_count: 240,
+          comments_count: 58,
+          interaction_score: 968,
+          fresh_hot_score: 361.2,
+          true_pain_label: "决策困难+效率问题",
+          pain_description: "担心错过 AI 搜索流量入口，但不知道从哪里开始做。",
+          business_logic: "用清单式步骤把复杂概念拆成可执行动作。",
+          content_logic: "先抛结论，再拆误区、步骤和验证指标。",
+          hook_types: ["避坑", "清单"],
+          note_url: "",
+        },
+      ],
     },
     queueStatus: [{ status: "success", count: 199 }],
     topFresh: [
@@ -325,6 +381,20 @@ module.exports = async function handler(req, res) {
   const apiDateParams = apiDate ? [apiDate] : [];
   const apiDateWhere = apiDate ? "l.started_at >= $1::date AND l.started_at < $1::date + interval '1 day'" : "TRUE";
   const apiDateJoin = apiDate ? "AND l.started_at >= $1::date AND l.started_at < $1::date + interval '1 day'" : "";
+  const contentStart = parseDateParam(req, "contentStart");
+  const contentEnd = parseDateParam(req, "contentEnd");
+  const contentParams = [];
+  const contentDateColumn = "COALESCE(n.fetched_at, a.created_at)";
+  const contentWhereParts = ["a.analysis_status = 'success'"];
+  if (contentStart) {
+    contentParams.push(contentStart);
+    contentWhereParts.push(`${contentDateColumn} >= $${contentParams.length}::date`);
+  }
+  if (contentEnd) {
+    contentParams.push(contentEnd);
+    contentWhereParts.push(`${contentDateColumn} < $${contentParams.length}::date + interval '1 day'`);
+  }
+  const contentWhere = contentWhereParts.join(" AND ");
 
   const client = await getPool().connect();
   try {
@@ -341,6 +411,10 @@ module.exports = async function handler(req, res) {
       visualPatterns,
       recentRuns,
       failedQueue,
+      contentOverviewRows,
+      contentTopicFrequency,
+      contentPersonaDistribution,
+      contentNoteAnalysis,
       opsOverviewRows,
       apiStatusSummary,
       apiUsageHourly,
@@ -564,6 +638,94 @@ module.exports = async function handler(req, res) {
         ORDER BY updated_at DESC
         LIMIT 8
         `,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          count(DISTINCT a.note_id)::int AS "noteTotal",
+          COALESCE(sum(a.interaction_score), 0)::bigint AS "interactionTotal",
+          COALESCE(sum(a.like_count), 0)::bigint AS "likeTotal",
+          COALESCE(sum(a.collected_count), 0)::bigint AS "collectedTotal",
+          COALESCE(sum(a.comments_count), 0)::bigint AS "commentsTotal",
+          min(${contentDateColumn}) AS "minCapturedAt",
+          max(${contentDateColumn}) AS "maxCapturedAt",
+          min(a.publish_time) AS "minPublishTime",
+          max(a.publish_time) AS "maxPublishTime"
+        FROM public.geo_note_content_assets a
+        LEFT JOIN public.note_details n ON n.note_id = a.note_id
+        WHERE ${contentWhere}
+        `,
+        contentParams,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          COALESCE(NULLIF(trim(a.core_topic_category), ''), '未标注') AS core_topic_category,
+          count(*)::int AS note_count,
+          round((count(*)::numeric * 100) / NULLIF(sum(count(*)) OVER (), 0), 2)::float AS share_pct
+        FROM public.geo_note_content_assets a
+        LEFT JOIN public.note_details n ON n.note_id = a.note_id
+        WHERE ${contentWhere}
+        GROUP BY COALESCE(NULLIF(trim(a.core_topic_category), ''), '未标注')
+        ORDER BY note_count DESC, core_topic_category
+        LIMIT 100
+        `,
+        contentParams,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          COALESCE(NULLIF(trim(a.primary_target_persona), ''), '未标注') AS primary_target_persona,
+          count(*)::int AS note_count,
+          round((count(*)::numeric * 100) / NULLIF(sum(count(*)) OVER (), 0), 2)::float AS share_pct
+        FROM public.geo_note_content_assets a
+        LEFT JOIN public.note_details n ON n.note_id = a.note_id
+        WHERE ${contentWhere}
+        GROUP BY COALESCE(NULLIF(trim(a.primary_target_persona), ''), '未标注')
+        ORDER BY note_count DESC, primary_target_persona
+        `,
+        contentParams,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          a.note_id,
+          COALESCE(
+            NULLIF(a.title, ''),
+            NULLIF(n.title, ''),
+            NULLIF(n.source_title, ''),
+            NULLIF(left(trim(regexp_replace(COALESCE(a.content, n.content, n.source_content, ''), '[[:space:]]+', ' ', 'g')), 80), ''),
+            a.note_id
+          ) AS title,
+          a.author_nickname,
+          ${contentDateColumn} AS captured_at,
+          a.publish_time,
+          a.note_type,
+          a.core_topic_category,
+          COALESCE(NULLIF(trim(a.primary_target_persona), ''), '未标注') AS primary_target_persona,
+          a.like_count,
+          a.collected_count,
+          a.comments_count,
+          a.share_count,
+          a.interaction_score,
+          round(a.fresh_hot_score::numeric, 2)::float AS fresh_hot_score,
+          a.true_pain_label,
+          a.pain_description,
+          a.business_logic,
+          a.content_logic,
+          a.hook_types,
+          a.note_url
+        FROM public.geo_note_content_assets a
+        LEFT JOIN public.note_details n ON n.note_id = a.note_id
+        WHERE ${contentWhere}
+        ORDER BY a.interaction_score DESC NULLS LAST, ${contentDateColumn} DESC NULLS LAST
+        LIMIT 300
+        `,
+        contentParams,
       ),
       query(
         client,
@@ -1039,6 +1201,22 @@ module.exports = async function handler(req, res) {
         permissions: permissionCatalog,
       },
       overview: canContent ? overviewRows[0] : null,
+      contentInsight: canContent
+        ? {
+            range: {
+              start: contentStart,
+              end: contentEnd,
+              minCapturedAt: contentOverviewRows[0]?.minCapturedAt || null,
+              maxCapturedAt: contentOverviewRows[0]?.maxCapturedAt || null,
+              minPublishTime: contentOverviewRows[0]?.minPublishTime || null,
+              maxPublishTime: contentOverviewRows[0]?.maxPublishTime || null,
+            },
+            overview: contentOverviewRows[0] || null,
+            topicFrequency: contentTopicFrequency,
+            personaDistribution: contentPersonaDistribution,
+            noteAnalysis: contentNoteAnalysis,
+          }
+        : null,
       queueStatus: canContent ? queueStatus : [],
       topFresh: canContent ? topFresh : [],
       personaDistribution: canContent ? personaDistribution : [],

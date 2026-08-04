@@ -2,6 +2,7 @@ import {
   Activity,
   AlertTriangle,
   BarChart3,
+  Bookmark,
   Brain,
   CheckCircle2,
   Clock3,
@@ -9,10 +10,12 @@ import {
   FileText,
   Filter,
   Gauge,
+  Heart,
   KeyRound,
   Layers3,
   ListChecks,
   LogOut,
+  MessageCircle,
   RefreshCcw,
   Save,
   Search,
@@ -43,7 +46,7 @@ const shortDateFormatter = new Intl.DateTimeFormat("zh-CN", {
 });
 
 const navItems = [
-  { id: "content", label: "内容资产", icon: Database, permission: "content" },
+  { id: "content", label: "GEO红书需求洞察", icon: Database, permission: "content" },
   { id: "ops", label: "运行监控", icon: Gauge, permission: "ops" },
   { id: "models", label: "模型配置", icon: KeyRound, permission: "models" },
   { id: "admin", label: "管理员配置", icon: Shield, permission: "admin" },
@@ -1111,42 +1114,74 @@ function LoginScreen({ onLogin, loading, error }) {
   );
 }
 
-function DashboardTable({ rows }) {
+function insightSearchText(item) {
+  return [
+    item.title,
+    item.note_id,
+    item.author_nickname,
+    item.note_type,
+    item.core_topic_category,
+    item.primary_target_persona,
+    item.true_pain_label,
+    item.pain_description,
+    item.business_logic,
+    item.content_logic,
+    arrayText(item.hook_types),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function InsightNoteTable({ rows, compact = false }) {
+  if (!rows.length) return <div className="empty-state">暂无数据</div>;
+
   return (
-    <div className="table-wrap">
-      <table>
+    <div className="table-wrap insight-table-wrap">
+      <table className="insight-table">
         <thead>
           <tr>
             <th>笔记</th>
-            <th>时效分</th>
-            <th>互动</th>
-            <th>人群</th>
-            <th>漏斗</th>
-            <th>痛点</th>
+            <th>主题类型</th>
+            <th>目标人群</th>
+            <th>互动数据</th>
+            <th>情绪钩子</th>
+            {!compact ? <th>业务逻辑</th> : null}
           </tr>
         </thead>
         <tbody>
           {rows.map((item) => (
-            <tr key={item.note_id}>
+            <tr key={`${item.note_id}-${item.primary_target_persona || ""}`}>
               <td>
                 <div className="note-title">{item.title || item.note_id}</div>
                 <div className="note-meta">
-                  {item.note_id} · {formatDate(item.publish_time)}
+                  {item.note_id} · 抓取 {formatDate(item.captured_at)} · 发布 {formatDate(item.publish_time)}
                 </div>
               </td>
-              <td className="metric-cell">{formatScore(item.fresh_hot_score)}</td>
-              <td className="metric-cell">{formatNumber(item.interaction_score)}</td>
               <td>
-                <div className="clamped">{arrayText(item.target_persona_tags) || item.primary_target_persona}</div>
+                <StatusPill tone="blue">{item.core_topic_category || "未标注"}</StatusPill>
+                <div className="note-meta">{item.note_type || "-"}</div>
               </td>
               <td>
-                <StatusPill tone={item.funnel_role === "转化" ? "green" : item.funnel_role === "信任" ? "blue" : "amber"}>
-                  {item.funnel_role || "未标注"}
-                </StatusPill>
+                <div className="clamped">{item.primary_target_persona || "未标注"}</div>
               </td>
               <td>
-                <div className="clamped">{item.true_pain_label || "-"}</div>
+                <div className="insight-metrics-mini">
+                  <strong>{formatNumber(item.interaction_score)}</strong>
+                  <span>赞 {formatNumber(item.like_count)}</span>
+                  <span>藏 {formatNumber(item.collected_count)}</span>
+                  <span>评 {formatNumber(item.comments_count)}</span>
+                </div>
               </td>
+              <td>
+                <div className="clamped">{item.true_pain_label || item.pain_description || "-"}</div>
+                {arrayText(item.hook_types) ? <div className="note-meta">{arrayText(item.hook_types)}</div> : null}
+              </td>
+              {!compact ? (
+                <td>
+                  <div className="clamped">{item.business_logic || item.content_logic || "-"}</div>
+                </td>
+              ) : null}
             </tr>
           ))}
         </tbody>
@@ -1155,151 +1190,207 @@ function DashboardTable({ rows }) {
   );
 }
 
-function ContentDashboard({ data, loading, filter }) {
-  const filteredTopFresh = useMemo(() => {
-    const rows = data?.topFresh || [];
-    const keyword = filter.trim().toLowerCase();
-    if (!keyword) return rows;
-    return rows.filter((item) =>
-      [
-        item.title,
-        item.note_id,
-        item.primary_target_persona,
-        item.primary_industry,
-        item.funnel_role,
-        item.true_pain_label,
-        arrayText(item.target_persona_tags),
-        arrayText(item.industry_tags),
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(keyword),
-    );
-  }, [data, filter]);
+function TopicFrequencyList({ rows }) {
+  const max = Math.max(1, ...rows.map((item) => Number(item.note_count || 0)));
+  if (!rows.length) return <div className="empty-state">暂无数据</div>;
 
-  const maxPersona = Math.max(1, ...(data?.personaDistribution || []).map((item) => Number(item.note_count || 0)));
-  const maxIndustry = Math.max(1, ...(data?.industryDistribution || []).map((item) => Number(item.note_count || 0)));
-  const maxPain = Math.max(1, ...(data?.painMap || []).map((item) => Number(item.note_count || 0)));
-  const maxVisual = Math.max(1, ...(data?.visualPatterns || []).map((item) => Number(item.note_count || 0)));
-  const overview = data?.overview || {};
-  const queueSuccess = (data?.queueStatus || []).find((item) => item.status === "success")?.count || 0;
-  const queueFailed = (data?.queueStatus || []).find((item) => item.status === "failed")?.count || 0;
+  return (
+    <div className="topic-frequency-list">
+      {rows.map((item) => {
+        const width = Math.max(4, Math.round((Number(item.note_count || 0) / max) * 100));
+        return (
+          <div className="topic-frequency-row" key={item.core_topic_category || "未标注"}>
+            <div className="topic-frequency-main">
+              <span>{item.core_topic_category || "未标注"}</span>
+              <strong>{formatNumber(item.note_count)}</strong>
+            </div>
+            <div className="topic-frequency-track" aria-hidden="true">
+              <div style={{ width: `${width}%` }} />
+            </div>
+            <small>{formatPercent(item.share_pct)}</small>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function polarPoint(cx, cy, radius, angle) {
+  const radians = ((angle - 90) * Math.PI) / 180;
+  return {
+    x: cx + radius * Math.cos(radians),
+    y: cy + radius * Math.sin(radians),
+  };
+}
+
+function pieSlicePath(cx, cy, radius, startAngle, endAngle) {
+  const start = polarPoint(cx, cy, radius, startAngle);
+  const end = polarPoint(cx, cy, radius, endAngle);
+  const largeArc = endAngle - startAngle > 180 ? 1 : 0;
+  return `M ${cx} ${cy} L ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArc} 1 ${end.x} ${end.y} Z`;
+}
+
+function PersonaPieChart({ rows, selectedPersona, onSelect }) {
+  const total = rows.reduce((sum, item) => sum + Number(item.note_count || 0), 0);
+  let cursor = 0;
+  const segments = rows.map((item, index) => {
+    const value = Number(item.note_count || 0);
+    const angle = total ? (value / total) * 360 : 0;
+    const segment = {
+      ...item,
+      color: chartColors[index % chartColors.length],
+      startAngle: cursor,
+      endAngle: cursor + Math.min(angle, 359.99),
+    };
+    cursor += angle;
+    return segment;
+  });
+
+  if (!rows.length) return <div className="empty-state">暂无数据</div>;
+
+  return (
+    <div className="persona-pie-layout">
+      <svg className="persona-pie" viewBox="0 0 220 220" role="img" aria-label="目标人群占比">
+        {segments.map((item) => {
+          const label = item.primary_target_persona || "未标注";
+          const selected = selectedPersona === label;
+          return (
+            <path
+              key={label}
+              className={`persona-pie-segment ${selected ? "selected" : ""}`}
+              d={pieSlicePath(110, 110, 96, item.startAngle, item.endAngle)}
+              fill={item.color}
+              role="button"
+              tabIndex="0"
+              onClick={() => onSelect(selected ? "" : label)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") onSelect(selected ? "" : label);
+              }}
+            />
+          );
+        })}
+        <circle cx="110" cy="110" r="54" className="persona-pie-hole" />
+        <text x="110" y="104" className="persona-pie-total">
+          {formatNumber(total)}
+        </text>
+        <text x="110" y="126" className="persona-pie-caption">
+          笔记
+        </text>
+      </svg>
+      <div className="persona-legend">
+        <button className={!selectedPersona ? "active" : ""} onClick={() => onSelect("")} type="button">
+          <i style={{ background: "#8d9890" }} />
+          <span>全部人群</span>
+          <strong>{formatNumber(total)}</strong>
+        </button>
+        {segments.map((item) => {
+          const label = item.primary_target_persona || "未标注";
+          return (
+            <button className={selectedPersona === label ? "active" : ""} key={label} onClick={() => onSelect(label)} type="button">
+              <i style={{ background: item.color }} />
+              <span>{label}</span>
+              <strong>{formatNumber(item.note_count)}</strong>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ContentDashboard({ data, loading, filter, contentStart, contentEnd, onContentRangeChange }) {
+  const [selectedPersona, setSelectedPersona] = useState("");
+  const insight = data?.contentInsight || {};
+  const overview = insight.overview || {};
+  const topicRows = insight.topicFrequency || [];
+  const personaRows = insight.personaDistribution || [];
+  const noteRows = insight.noteAnalysis || [];
+  const keyword = filter.trim().toLowerCase();
+
+  useEffect(() => {
+    if (!selectedPersona) return;
+    const exists = personaRows.some((item) => (item.primary_target_persona || "未标注") === selectedPersona);
+    if (!exists) setSelectedPersona("");
+  }, [personaRows, selectedPersona]);
+
+  const filteredNotes = useMemo(() => {
+    if (!keyword) return noteRows;
+    return noteRows.filter((item) => insightSearchText(item).includes(keyword));
+  }, [keyword, noteRows]);
+
+  const personaDetailRows = useMemo(() => {
+    if (!selectedPersona) return filteredNotes;
+    return filteredNotes.filter((item) => (item.primary_target_persona || "未标注") === selectedPersona);
+  }, [filteredNotes, selectedPersona]);
+
+  const rangeMeta = overview.minCapturedAt
+    ? `${formatShortDate(overview.minCapturedAt)} - ${formatShortDate(overview.maxCapturedAt)}`
+    : "无数据";
 
   return (
     <>
-      <section className="stats-grid">
-        <Stat icon={Database} label="详情成功" value={formatNumber(overview.noteDetailSuccess)} sub={`失败 ${formatNumber(overview.noteDetailFailed || 0)}`} />
-        <Stat
-          icon={Brain}
-          label="内容资产"
-          value={formatNumber(overview.assetSuccess)}
-          sub={`豆包总结成功 ${formatNumber(overview.contentAssetSuccessRuns ?? overview.kimiSuccessRuns)}`}
-          tone="teal"
+      <section className="panel content-range-panel">
+        <SectionHeader
+          icon={Filter}
+          title="周期筛选"
+          action={
+            <button className="copy-button" onClick={() => onContentRangeChange({ start: "", end: "" })} type="button">
+              清空
+            </button>
+          }
         />
-        <Stat icon={Layers3} label="向量资产" value={formatNumber(overview.vectorCount)} sub="pgvector halfvec(2048)" tone="purple" />
-        <Stat icon={Activity} label="队列完成" value={formatNumber(queueSuccess)} sub={queueFailed ? `失败 ${formatNumber(queueFailed)}` : "实时 worker active"} tone="amber" />
-      </section>
-
-      <section className="layout">
-        <div className="main-column">
-          <section className="panel panel-table">
-            <SectionHeader
-              icon={BarChart3}
-              title="近期可复用爆文"
-              action={
-                <StatusPill tone="neutral">
-                  <Filter size={13} />
-                  fresh_hot_score
-                </StatusPill>
-              }
-            />
-            {loading && !data ? <div className="loading">加载中</div> : <DashboardTable rows={filteredTopFresh} />}
-          </section>
-
-          <section className="panel">
-            <SectionHeader icon={Target} title="真实痛点地图" />
-            <div className="stack">
-              {(data?.painMap || []).map((item) => (
-                <BarRow
-                  key={`${item.true_pain_label}-${item.pain_authenticity}`}
-                  label={`${item.true_pain_label || "未标注"} · ${item.pain_authenticity || "未知"}`}
-                  value={item.note_count}
-                  max={maxPain}
-                  detail={`均时效分 ${formatScore(item.avg_fresh_hot_score)} · ${arrayText(item.example_note_ids)}`}
-                  tone="green"
-                />
-              ))}
-            </div>
-          </section>
+        <div className="content-date-row">
+          <label>
+            <span>开始日期</span>
+            <input type="date" value={contentStart} onChange={(event) => onContentRangeChange({ start: event.target.value })} />
+          </label>
+          <label>
+            <span>结束日期</span>
+            <input type="date" value={contentEnd} onChange={(event) => onContentRangeChange({ end: event.target.value })} />
+          </label>
+          <div className="content-range-meta">
+            <span>数据范围</span>
+            <strong>{rangeMeta}</strong>
+          </div>
         </div>
-
-        <aside className="side-column">
-          <section className="panel">
-            <SectionHeader icon={Users} title="目标人群" />
-            <div className="stack">
-              {(data?.personaDistribution || []).map((item) => (
-                <BarRow key={item.target_persona} label={item.target_persona} value={item.note_count} max={maxPersona} detail={`均时效分 ${formatScore(item.avg_fresh_hot_score)}`} />
-              ))}
-            </div>
-          </section>
-
-          <section className="panel">
-            <SectionHeader icon={FileText} title="漏斗结构" />
-            <div className="funnel-list">
-              {(data?.funnelDistribution || []).map((item) => (
-                <div className="funnel-item" key={item.funnel_role}>
-                  <span>{item.funnel_role || "未标注"}</span>
-                  <strong>{formatNumber(item.note_count)}</strong>
-                  <small>{formatScore(item.avg_fresh_hot_score)}</small>
-                </div>
-              ))}
-            </div>
-          </section>
-        </aside>
       </section>
 
-      <section className="lower-grid">
+      <section className="stats-grid content-stats-grid">
+        <Stat icon={FileText} label="笔记总数" value={formatNumber(overview.noteTotal)} sub="当前周期" />
+        <Stat icon={Activity} label="笔记互动总量" value={formatNumber(overview.interactionTotal)} sub="赞+藏+评*2" tone="teal" />
+        <Stat icon={Heart} label="笔记点赞总量" value={formatNumber(overview.likeTotal)} sub="like_count" tone="purple" />
+        <Stat icon={Bookmark} label="笔记收藏总量" value={formatNumber(overview.collectedTotal)} sub="collected_count" tone="amber" />
+        <Stat icon={MessageCircle} label="笔记评论总量" value={formatNumber(overview.commentsTotal)} sub="comments_count" tone="blue" />
+      </section>
+
+      <section className="panel panel-table">
+        <SectionHeader
+          icon={BarChart3}
+          title="笔记分析"
+          action={<StatusPill tone="neutral">{loading && !data ? "加载中" : `${formatNumber(filteredNotes.length)} 条`}</StatusPill>}
+        />
+        {loading && !data ? <div className="loading">加载中</div> : <InsightNoteTable rows={filteredNotes} />}
+      </section>
+
+      <section className="content-insight-grid">
         <section className="panel">
-          <SectionHeader icon={Database} title="行业机会" />
-          <div className="stack">
-            {(data?.industryDistribution || []).map((item) => (
-              <BarRow key={item.industry} label={item.industry} value={item.note_count} max={maxIndustry} detail={`均时效分 ${formatScore(item.avg_fresh_hot_score)}`} tone="amber" />
-            ))}
-          </div>
+          <SectionHeader icon={Database} title="笔记类型占比" />
+          <TopicFrequencyList rows={topicRows} />
         </section>
 
         <section className="panel">
-          <SectionHeader icon={Sparkles} title="视觉资产" />
-          <div className="stack">
-            {(data?.visualPatterns || []).map((item, index) => (
-              <BarRow
-                key={`${item.information_density_level}-${item.visual_main_colors}-${index}`}
-                label={`${item.information_density_level || "未标注"} · ${item.visual_main_colors || "无主色"}`}
-                value={item.note_count}
-                max={maxVisual}
-                detail={item.visual_emotion || `均时效分 ${formatScore(item.avg_fresh_hot_score)}`}
-                tone="purple"
-              />
-            ))}
-          </div>
+          <SectionHeader icon={Users} title="目标人群占比" />
+          <PersonaPieChart rows={personaRows} selectedPersona={selectedPersona} onSelect={setSelectedPersona} />
         </section>
+      </section>
 
-        <section className="panel">
-          <SectionHeader icon={Activity} title="最近内容资产总结" />
-          <div className="run-list">
-            {(data?.recentRuns || []).map((item) => (
-              <div className="run-item" key={item.run_id}>
-                <div>
-                  <strong>#{item.run_id}</strong>
-                  <span>{item.note_id}</span>
-                </div>
-                <StatusPill tone={statusTone(item.status)}>{item.status}</StatusPill>
-                <small>{formatDuration(item.latency_ms)}</small>
-              </div>
-            ))}
-          </div>
-        </section>
+      <section className="panel panel-table persona-detail-panel">
+        <SectionHeader
+          icon={Target}
+          title="人群笔记明细"
+          action={<StatusPill tone={selectedPersona ? "blue" : "neutral"}>{selectedPersona || "全部人群"}</StatusPill>}
+        />
+        <InsightNoteTable rows={personaDetailRows} compact />
       </section>
     </>
   );
@@ -2017,6 +2108,8 @@ export default function App() {
   const [filter, setFilter] = useState("");
   const [activeView, setActiveView] = useState("content");
   const [apiDate, setApiDate] = useState("");
+  const [contentStart, setContentStart] = useState("");
+  const [contentEnd, setContentEnd] = useState("");
   const [currentUser, setCurrentUser] = useState(null);
   const [permissionCatalog, setPermissionCatalog] = useState({});
 
@@ -2079,7 +2172,13 @@ export default function App() {
     }
     try {
       const selectedApiDate = options.apiDateOverride ?? apiDate;
-      const query = selectedApiDate ? `?apiDate=${encodeURIComponent(selectedApiDate)}` : "";
+      const selectedContentStart = options.contentStartOverride ?? contentStart;
+      const selectedContentEnd = options.contentEndOverride ?? contentEnd;
+      const params = new URLSearchParams();
+      if (selectedApiDate) params.set("apiDate", selectedApiDate);
+      if (selectedContentStart) params.set("contentStart", selectedContentStart);
+      if (selectedContentEnd) params.set("contentEnd", selectedContentEnd);
+      const query = params.toString() ? `?${params.toString()}` : "";
       const payload = await requestJson(`/api/dashboard${query}`);
       setData(payload);
     } catch (err) {
@@ -2106,7 +2205,7 @@ export default function App() {
     loadDashboard();
     const timer = window.setInterval(() => loadDashboard({ background: true }), 30000);
     return () => window.clearInterval(timer);
-  }, [currentUser?.user_id, apiDate]);
+  }, [currentUser?.user_id, apiDate, contentStart, contentEnd]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -2118,6 +2217,11 @@ export default function App() {
 
   function handleApiDateChange(value) {
     setApiDate(value);
+  }
+
+  function handleContentRangeChange(nextRange) {
+    if (Object.prototype.hasOwnProperty.call(nextRange, "start")) setContentStart(nextRange.start);
+    if (Object.prototype.hasOwnProperty.call(nextRange, "end")) setContentEnd(nextRange.end);
   }
 
   const isSample = data?.source === "sample";
@@ -2178,7 +2282,7 @@ export default function App() {
               {activeView === "content" ? (
                 <div className="search-box">
                   <Search size={16} />
-                  <input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="搜索标题、人群、行业、痛点" />
+                  <input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="搜索标题、人群、主题、痛点" />
                 </div>
               ) : null}
               <button className="icon-button" onClick={loadDashboard} disabled={loading} title="刷新数据" type="button">
@@ -2204,7 +2308,16 @@ export default function App() {
             </div>
           ) : null}
 
-          {activeView === "content" ? <ContentDashboard data={data} loading={loading} filter={filter} /> : null}
+          {activeView === "content" ? (
+            <ContentDashboard
+              data={data}
+              loading={loading}
+              filter={filter}
+              contentStart={contentStart}
+              contentEnd={contentEnd}
+              onContentRangeChange={handleContentRangeChange}
+            />
+          ) : null}
           {activeView === "ops" ? <OpsDashboard data={data} apiDate={apiDate} onApiDateChange={handleApiDateChange} /> : null}
           {activeView === "models" ? <ModelConfigView data={data} /> : null}
           {activeView === "admin" ? <AdminConfigView currentUser={currentUser} permissionCatalog={permissionCatalog} /> : null}

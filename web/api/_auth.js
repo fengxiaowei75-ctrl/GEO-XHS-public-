@@ -6,7 +6,7 @@ const SESSION_TTL_SECONDS = Number(process.env.DASHBOARD_SESSION_TTL_SECONDS || 
 const PASSWORD_ITERATIONS = 260000;
 
 const permissionCatalog = {
-  content: "内容资产",
+  content: "GEO红书需求洞察",
   ops: "运行监控",
   models: "模型配置",
   admin: "管理员配置",
