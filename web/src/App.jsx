@@ -221,6 +221,36 @@ function noteDateKey(item) {
   return dateKeyFromValue(item?.note_date || item?.publish_time);
 }
 
+function buildWordCloudTerms(rows, extractTerms) {
+  const termMap = new Map();
+  rows.forEach((item) => {
+    const terms = extractTerms(item)
+      .map((value) => String(value || "").trim())
+      .filter((value) => value && value !== "未标注");
+    Array.from(new Set(terms)).forEach((term) => {
+      const current = termMap.get(term) || { term, count: 0, interaction: 0 };
+      current.count += 1;
+      current.interaction += Number(item.interaction_score || 0);
+      termMap.set(term, current);
+    });
+  });
+  const ranked = Array.from(termMap.values())
+    .map((item) => ({
+      ...item,
+      score: item.count * 10 + Math.log10(Math.max(1, item.interaction) + 1) * 3,
+    }))
+    .sort((a, b) => b.score - a.score || b.count - a.count || a.term.localeCompare(b.term, "zh-CN"))
+    .slice(0, 36);
+  const scores = ranked.map((item) => item.score);
+  const min = Math.min(...scores, 0);
+  const max = Math.max(...scores, 1);
+  return ranked.map((item, index) => ({
+    ...item,
+    size: 13 + ((item.score - min) / Math.max(1, max - min)) * 19,
+    rank: index + 1,
+  }));
+}
+
 function statusTone(status) {
   if (status === "success" || status === "active" || status === true) return "green";
   if (status === "running") return "blue";
@@ -1223,6 +1253,20 @@ function insightSearchText(item) {
     .toLowerCase();
 }
 
+function ExpandableCellText({ value, max = 86 }) {
+  const text = String(value || "-").trim() || "-";
+  if (text.length <= max) return <div className="insight-table-text">{text}</div>;
+  return (
+    <details className="expandable-cell">
+      <summary>
+        <span>{textPreview(text, max)}</span>
+        <em>展开</em>
+      </summary>
+      <p>{text}</p>
+    </details>
+  );
+}
+
 function InsightNoteTable({ rows, compact = false }) {
   if (!rows.length) return <div className="empty-state">暂无数据</div>;
 
@@ -1257,11 +1301,13 @@ function InsightNoteTable({ rows, compact = false }) {
                 </div>
               </td>
               <td>
-                <StatusPill tone="blue">{item.core_topic_category || "未标注"}</StatusPill>
+                <div className="insight-pill-wrap">
+                  <StatusPill tone="blue">{item.core_topic_category || "未标注"}</StatusPill>
+                </div>
                 <div className="note-meta">{item.note_type || "-"}</div>
               </td>
               <td>
-                <div className="clamped">{item.primary_target_persona || "未标注"}</div>
+                <ExpandableCellText value={item.primary_target_persona || arrayText(item.target_persona_tags) || "未标注"} max={46} />
               </td>
               <td>
                 <div className="insight-metrics-mini">
@@ -1280,11 +1326,11 @@ function InsightNoteTable({ rows, compact = false }) {
                 </div>
               </td>
               <td>
-                <div className="clamped">{item.true_pain_label || item.pain_description || "-"}</div>
-                {arrayText(item.hook_types) ? <div className="note-meta">{arrayText(item.hook_types)}</div> : null}
+                <ExpandableCellText value={item.true_pain_label || item.pain_description || "-"} max={76} />
+                {arrayText(item.hook_types) ? <TagLine values={item.hook_types} /> : null}
               </td>
               <td className="business-logic-cell">
-                <div className="clamped business-logic-text">{item.business_logic || item.content_logic || "-"}</div>
+                <ExpandableCellText value={item.business_logic || item.content_logic || "-"} max={108} />
               </td>
             </tr>
           ))}
@@ -1834,8 +1880,86 @@ function NoteAnalysisBoard({ note, onClose }) {
   );
 }
 
+function WordCloudBox({ title, caption, terms, tone }) {
+  return (
+    <section className={`word-cloud-box word-cloud-${tone || "blue"}`}>
+      <div className="word-cloud-head">
+        <div>
+          <span>{caption}</span>
+          <h3>{title}</h3>
+        </div>
+        <StatusPill tone="neutral">{formatNumber(terms.length)} 个词</StatusPill>
+      </div>
+      {terms.length ? (
+        <div className="word-cloud-canvas">
+          {terms.map((item) => (
+            <span
+              className={`word-cloud-term rank-${Math.min(5, Math.ceil(item.rank / 4))}`}
+              key={item.term}
+              style={{ "--term-size": `${item.size}px` }}
+              title={`${item.term}：${item.count} 篇，互动 ${formatNumber(item.interaction)}`}
+            >
+              {item.term}
+              <em>{item.count}</em>
+            </span>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-state word-cloud-empty">暂无可聚合词</div>
+      )}
+    </section>
+  );
+}
+
+function WordCloudPanel({ rows, personas, selectedPersona, onPersonaChange }) {
+  const personaOptions = useMemo(
+    () => [
+      { value: "", label: "全部人群" },
+      ...personas.map((item) => {
+        const label = item.primary_target_persona || "未标注";
+        return { value: label, label: `${label} · ${formatCompact(item.note_count)}` };
+      }),
+    ],
+    [personas],
+  );
+  const scopedRows = useMemo(
+    () => (selectedPersona ? rows.filter((item) => (item.primary_target_persona || "未标注") === selectedPersona) : rows),
+    [rows, selectedPersona],
+  );
+  const emotionTerms = useMemo(
+    () =>
+      buildWordCloudTerms(scopedRows, (item) => [
+        ...listItems(item.hook_types),
+        item.true_pain_label,
+      ]),
+    [scopedRows],
+  );
+  const topicTerms = useMemo(
+    () =>
+      buildWordCloudTerms(scopedRows, (item) => [
+        item.core_topic_category || item.note_type,
+      ]),
+    [scopedRows],
+  );
+
+  return (
+    <section className="panel word-cloud-panel">
+      <SectionHeader
+        icon={Brain}
+        title="周期词云洞察"
+        action={<SelectControl label="人群筛选" value={selectedPersona} onChange={onPersonaChange} options={personaOptions} />}
+      />
+      <div className="word-cloud-grid">
+        <WordCloudBox title="情绪钩子词云" caption="用户在焦虑什么" terms={emotionTerms} tone="red" />
+        <WordCloudBox title="笔记类型词云" caption="营销号在讲什么" terms={topicTerms} tone="blue" />
+      </div>
+    </section>
+  );
+}
+
 function ContentDashboard({ data, loading, filter, contentStart, contentEnd, onContentRangeApply }) {
   const [selectedPersona, setSelectedPersona] = useState("");
+  const [wordCloudPersona, setWordCloudPersona] = useState("");
   const [selectedTrendDate, setSelectedTrendDate] = useState("");
   const [selectedNoteId, setSelectedNoteId] = useState("");
   const [draftStart, setDraftStart] = useState(contentStart || "");
@@ -1859,6 +1983,12 @@ function ContentDashboard({ data, loading, filter, contentStart, contentEnd, onC
     const exists = personaRows.some((item) => (item.primary_target_persona || "未标注") === selectedPersona);
     if (!exists) setSelectedPersona("");
   }, [personaRows, selectedPersona]);
+
+  useEffect(() => {
+    if (!wordCloudPersona) return;
+    const exists = personaRows.some((item) => (item.primary_target_persona || "未标注") === wordCloudPersona);
+    if (!exists) setWordCloudPersona("");
+  }, [personaRows, wordCloudPersona]);
 
   const trendDateKeys = useMemo(() => trendRows.map((item) => dateKeyFromValue(item.bucket_date)).filter(Boolean), [trendRows]);
 
@@ -1981,6 +2111,13 @@ function ContentDashboard({ data, loading, filter, contentStart, contentEnd, onC
             />
           ))}
         </section>
+
+        <WordCloudPanel
+          rows={noteRows}
+          personas={personaRows}
+          selectedPersona={wordCloudPersona}
+          onPersonaChange={setWordCloudPersona}
+        />
 
         <section className="panel content-trend-panel">
           <SectionHeader icon={Activity} title="笔记数据表现分布" action={<StatusPill tone="neutral">{loading && !data ? "加载中" : `${formatNumber(trendRows.length)} 天`}</StatusPill>} />
