@@ -152,6 +152,70 @@ function arrayText(value) {
   return String(value);
 }
 
+function listItems(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) return [];
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) return parsed.filter(Boolean);
+      if (parsed && typeof parsed === "object") return [parsed];
+    } catch {
+      return [text];
+    }
+    return [text];
+  }
+  return [value];
+}
+
+const detailFieldLabels = {
+  point: "知识点",
+  explanation: "解释",
+  reuse_angle: "复用方向",
+  angle: "角度",
+  suitable_persona: "适合人群",
+  suggested_funnel_role: "漏斗作用",
+  why_it_works: "有效原因",
+};
+
+function structuredText(item) {
+  if (!item) return "";
+  if (typeof item !== "object") return String(item);
+  return Object.entries(item)
+    .filter(([, value]) => value !== null && value !== undefined && value !== "")
+    .map(([key, value]) => `${detailFieldLabels[key] || key}：${arrayText(value)}`)
+    .join("；");
+}
+
+function textPreview(value, max = 150) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function noteContentText(item) {
+  return item?.content_excerpt || item?.asset_text_excerpt || item?.content_logic || item?.business_logic || "";
+}
+
+function dateKeyFromValue(value) {
+  if (!value) return "";
+  const matched = String(value).match(/^(\d{4}-\d{2}-\d{2})/);
+  if (matched) return matched[1];
+  return localDateInputValue(value);
+}
+
+function formatDayLabel(value) {
+  const key = dateKeyFromValue(value);
+  if (!key) return "-";
+  return `${key.slice(5, 7)}/${key.slice(8, 10)}`;
+}
+
+function noteDateKey(item) {
+  return dateKeyFromValue(item?.note_date || item?.publish_time);
+}
+
 function statusTone(status) {
   if (status === "success" || status === "active" || status === true) return "green";
   if (status === "running") return "blue";
@@ -1134,10 +1198,15 @@ function insightSearchText(item) {
     item.title,
     item.note_id,
     item.note_date,
+    item.content_excerpt,
     item.author_nickname,
     item.note_type,
     item.core_topic_category,
     item.primary_target_persona,
+    arrayText(item.target_persona_tags),
+    item.primary_industry,
+    arrayText(item.industry_tags),
+    item.funnel_role,
     item.true_pain_label,
     item.pain_description,
     item.business_logic,
@@ -1179,7 +1248,7 @@ function InsightNoteTable({ rows, compact = false }) {
               <td>
                 <div className="note-title">{item.title || item.note_id}</div>
                 <div className="note-meta">
-                  {item.note_id} · 笔记日期 {formatDate(item.note_date || item.publish_time)}
+                  {item.note_id} · 笔记日期 {formatDayLabel(item.note_date || item.publish_time)}
                 </div>
               </td>
               <td>
@@ -1402,7 +1471,7 @@ function InsightMetricCard({ icon: Icon, label, value, sub, tone, sparkRows, spa
   );
 }
 
-function ContentTrendChart({ rows }) {
+function ContentTrendChart({ rows, selectedDate, onSelectDate }) {
   const [hoverIndex, setHoverIndex] = useState(null);
   const prepared = useMemo(() => {
     const width = 920;
@@ -1422,6 +1491,7 @@ function ContentTrendChart({ rows }) {
     const barWidth = Math.max(2, Math.min(28, innerW / Math.max(1, rows.length) / 2.2));
     const points = rows.map((row, index) => ({
       ...row,
+      dateKey: dateKeyFromValue(row.bucket_date),
       x: xFor(index),
       countY: yCount(row.note_count),
       barHeight: padTop + innerH - yCount(row.note_count),
@@ -1485,7 +1555,13 @@ function ContentTrendChart({ rows }) {
             width={prepared.barWidth}
             height={Math.max(1, point.barHeight)}
             rx="5"
-            className="content-trend-bar"
+            className={`content-trend-bar ${selectedDate === point.dateKey ? "selected" : ""}`}
+            role="button"
+            tabIndex="0"
+            onClick={() => onSelectDate?.(point.dateKey)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") onSelectDate?.(point.dateKey);
+            }}
           />
         ))}
         {prepared.series.map((series) => (
@@ -1497,7 +1573,7 @@ function ContentTrendChart({ rows }) {
         {prepared.points.map((point, index) =>
           index % visibleLabelStep === 0 || index === prepared.points.length - 1 ? (
             <text key={`label-${point.bucket_date}-${index}`} x={point.x} y={prepared.height - 22} textAnchor="middle" className="chart-label chart-x-label">
-              {formatShortDate(point.bucket_date)}
+              {formatDayLabel(point.bucket_date)}
             </text>
           ) : null,
         )}
@@ -1510,7 +1586,7 @@ function ContentTrendChart({ rows }) {
       </svg>
       {hovered ? (
         <div className="content-trend-tooltip" style={{ left: `${tooltipLeft}%` }}>
-          <strong>{formatShortDate(hovered.bucket_date)}</strong>
+          <strong>{formatDayLabel(hovered.bucket_date)}</strong>
           <div>
             <span>笔记篇数</span>
             <b>{formatNumber(hovered.note_count)}</b>
@@ -1545,8 +1621,188 @@ function ContentTrendChart({ rows }) {
   );
 }
 
+function NoteMetricChip({ label, value }) {
+  return (
+    <span className="note-metric-chip">
+      <em>{label}</em>
+      <strong>{formatNumber(value)}</strong>
+    </span>
+  );
+}
+
+function DailyNoteRail({ date, notes, selectedNoteId, onSelectNote }) {
+  return (
+    <section className="daily-note-rail">
+      <div className="daily-note-rail-head">
+        <div>
+          <span>{date ? formatDayLabel(date) : "未选日期"}</span>
+          <strong>笔记预览</strong>
+        </div>
+        <StatusPill tone="neutral">{formatNumber(notes.length)} 条 · 按互动量</StatusPill>
+      </div>
+      {notes.length ? (
+        <div className="daily-note-strip">
+          {notes.map((item) => (
+            <button
+              className={`daily-note-card ${selectedNoteId === item.note_id ? "active" : ""}`}
+              key={item.note_id}
+              onClick={() => onSelectNote(item.note_id)}
+              type="button"
+            >
+              <div className="daily-note-card-top">
+                <StatusPill tone={item.funnel_role === "转化" ? "green" : item.funnel_role === "信任" ? "blue" : "neutral"}>
+                  {item.funnel_role || item.core_topic_category || "未标注"}
+                </StatusPill>
+                <span>{formatDayLabel(item.note_date || item.publish_time)}</span>
+              </div>
+              <strong>{item.title || item.note_id}</strong>
+              <p>{textPreview(noteContentText(item), 118) || item.true_pain_label || "-"}</p>
+              <div className="daily-note-metrics">
+                <NoteMetricChip label="互动" value={item.interaction_score} />
+                <NoteMetricChip label="赞" value={item.like_count} />
+                <NoteMetricChip label="藏" value={item.collected_count} />
+                <NoteMetricChip label="评" value={item.comments_count} />
+              </div>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-state daily-note-empty">暂无该日期笔记</div>
+      )}
+    </section>
+  );
+}
+
+function DetailTextBlock({ title, children }) {
+  return (
+    <section className="note-detail-block">
+      <h3>{title}</h3>
+      <div>{children}</div>
+    </section>
+  );
+}
+
+function StructuredList({ value }) {
+  const items = listItems(value);
+  if (!items.length) return <p>-</p>;
+  return (
+    <ul className="structured-list">
+      {items.slice(0, 6).map((item, index) => (
+        <li key={`${structuredText(item)}-${index}`}>{structuredText(item)}</li>
+      ))}
+    </ul>
+  );
+}
+
+function TagLine({ values }) {
+  const items = listItems(values);
+  if (!items.length) return <span>-</span>;
+  return (
+    <div className="note-tag-line">
+      {items.slice(0, 8).map((item) => (
+        <span key={String(item)}>{String(item)}</span>
+      ))}
+    </div>
+  );
+}
+
+function NoteAnalysisBoard({ note, onClose }) {
+  if (!note) return null;
+  const contentText = noteContentText(note);
+  return (
+    <section className="note-analysis-board">
+      <div className="note-analysis-head">
+        <div>
+          <div className="note-analysis-kicker">
+            <StatusPill tone="blue">{note.core_topic_category || "未标注主题"}</StatusPill>
+            <StatusPill tone="neutral">{note.primary_target_persona || "未标注人群"}</StatusPill>
+            {note.funnel_role ? <StatusPill tone={note.funnel_role === "转化" ? "green" : note.funnel_role === "信任" ? "blue" : "amber"}>{note.funnel_role}</StatusPill> : null}
+          </div>
+          <h3>{note.title || note.note_id}</h3>
+          <p>
+            {note.note_id} · {note.author_nickname || "-"} · 笔记日期 {formatDayLabel(note.note_date || note.publish_time)}
+          </p>
+        </div>
+        <button className="icon-button" onClick={onClose} type="button" aria-label="关闭笔记分析看板">
+          <XCircle size={18} />
+        </button>
+      </div>
+
+      <div className="note-analysis-metrics">
+        <NoteMetricChip label="互动" value={note.interaction_score} />
+        <NoteMetricChip label="点赞" value={note.like_count} />
+        <NoteMetricChip label="收藏" value={note.collected_count} />
+        <NoteMetricChip label="评论" value={note.comments_count} />
+        <NoteMetricChip label="转发" value={note.share_count} />
+        <NoteMetricChip label="热度" value={note.fresh_hot_score} />
+      </div>
+
+      <div className="note-analysis-grid">
+        <DetailTextBlock title="笔记文案">
+          <p>{contentText || "-"}</p>
+        </DetailTextBlock>
+        <DetailTextBlock title="痛点判断">
+          <p>
+            <strong>{note.true_pain_label || "-"}</strong>
+          </p>
+          <p>{note.pain_description || "-"}</p>
+          <p>{note.pain_evidence || ""}</p>
+          <div className="note-inline-meta">
+            <span>{note.pain_authenticity || "未判断"}</span>
+            <span>痛点置信 {formatScore(note.pain_confidence)}</span>
+          </div>
+        </DetailTextBlock>
+        <DetailTextBlock title="人群与行业">
+          <p>{note.target_persona_reason || "-"}</p>
+          <TagLine values={note.target_persona_tags} />
+          <div className="note-inline-meta">
+            <span>{note.primary_industry || "未标注行业"}</span>
+            <span>{arrayText(note.industry_tags) || "-"}</span>
+          </div>
+        </DetailTextBlock>
+        <DetailTextBlock title="业务逻辑">
+          <p>{note.business_logic || "-"}</p>
+          <p>{note.content_logic || ""}</p>
+          <p>{note.funnel_role_reason || ""}</p>
+          <div className="note-inline-meta">
+            <span>业务相关 {formatScore(note.business_relevance_score)}</span>
+            <span>模型置信 {formatScore(note.llm_confidence)}</span>
+          </div>
+        </DetailTextBlock>
+        <DetailTextBlock title="知识沉淀">
+          <StructuredList value={note.knowledge_points} />
+        </DetailTextBlock>
+        <DetailTextBlock title="可复用角度">
+          <StructuredList value={note.reusable_angles} />
+        </DetailTextBlock>
+        <DetailTextBlock title="标题模板">
+          <StructuredList value={note.title_templates} />
+        </DetailTextBlock>
+        <DetailTextBlock title="视觉拆解">
+          <p>{note.visual_group_style_prompt || "-"}</p>
+          <div className="note-inline-meta">
+            <span>{note.visual_main_colors || "未标注主色"}</span>
+            <span>{note.visual_emotion || "未标注情绪"}</span>
+            <span>{note.information_density_level || "未标注密度"}</span>
+          </div>
+          <p>{note.information_density_reason || ""}</p>
+          <p>{note.layout_structure || ""}</p>
+          <p>{note.cover_text_logic || ""}</p>
+        </DetailTextBlock>
+        <DetailTextBlock title="承接与风险">
+          <p>{note.cta_strategy || "-"}</p>
+          <TagLine values={note.hook_types} />
+          <StructuredList value={note.risk_flags} />
+        </DetailTextBlock>
+      </div>
+    </section>
+  );
+}
+
 function ContentDashboard({ data, loading, filter, contentStart, contentEnd, onContentRangeApply }) {
   const [selectedPersona, setSelectedPersona] = useState("");
+  const [selectedTrendDate, setSelectedTrendDate] = useState("");
+  const [selectedNoteId, setSelectedNoteId] = useState("");
   const [draftStart, setDraftStart] = useState(contentStart || "");
   const [draftEnd, setDraftEnd] = useState(contentEnd || "");
   const insight = data?.contentInsight || {};
@@ -1569,20 +1825,49 @@ function ContentDashboard({ data, loading, filter, contentStart, contentEnd, onC
     if (!exists) setSelectedPersona("");
   }, [personaRows, selectedPersona]);
 
+  const trendDateKeys = useMemo(() => trendRows.map((item) => dateKeyFromValue(item.bucket_date)).filter(Boolean), [trendRows]);
+
+  useEffect(() => {
+    if (!trendDateKeys.length) {
+      setSelectedTrendDate("");
+      return;
+    }
+    if (!selectedTrendDate || !trendDateKeys.includes(selectedTrendDate)) {
+      setSelectedTrendDate(trendDateKeys[trendDateKeys.length - 1]);
+    }
+  }, [selectedTrendDate, trendDateKeys]);
+
   const filteredNotes = useMemo(() => {
     if (!keyword) return noteRows;
     return noteRows.filter((item) => insightSearchText(item).includes(keyword));
   }, [keyword, noteRows]);
+
+  const selectedDayNotes = useMemo(
+    () =>
+      filteredNotes
+        .filter((item) => noteDateKey(item) === selectedTrendDate)
+        .sort((a, b) => Number(b.interaction_score || 0) - Number(a.interaction_score || 0)),
+    [filteredNotes, selectedTrendDate],
+  );
 
   const personaDetailRows = useMemo(() => {
     if (!selectedPersona) return filteredNotes;
     return filteredNotes.filter((item) => (item.primary_target_persona || "未标注") === selectedPersona);
   }, [filteredNotes, selectedPersona]);
 
+  const selectedNote = useMemo(
+    () => selectedDayNotes.find((item) => item.note_id === selectedNoteId) || null,
+    [selectedDayNotes, selectedNoteId],
+  );
+
+  useEffect(() => {
+    if (selectedNoteId && !selectedNote) setSelectedNoteId("");
+  }, [selectedNote, selectedNoteId]);
+
   const rangeStart = overview.minNoteDate || overview.minCapturedAt;
   const rangeEnd = overview.maxNoteDate || overview.maxCapturedAt;
   const rangeMeta = rangeStart
-    ? `${formatShortDate(rangeStart)} - ${formatShortDate(rangeEnd)}`
+    ? `${formatDayLabel(rangeStart)} - ${formatDayLabel(rangeEnd)}`
     : "无数据";
   const activeRangeLabel =
     contentStart || contentEnd ? `${contentStart || "最早"} - ${contentEnd || "今天"}` : "累计";
@@ -1611,24 +1896,24 @@ function ContentDashboard({ data, loading, filter, contentStart, contentEnd, onC
 
         <section className="panel content-range-panel">
           <SectionHeader icon={Filter} title="周期筛选" />
-          <div className="content-range-actions">
-            {[30, 90, 180].map((days) => (
-              <button className="copy-button" onClick={() => applyQuickRange(days)} type="button" key={days}>
-                近{days}天
+          <div className="content-filter-row">
+            <div className="content-range-actions">
+              {[30, 90, 180].map((days) => (
+                <button className="copy-button" onClick={() => applyQuickRange(days)} type="button" key={days}>
+                  近{days}天
+                </button>
+              ))}
+              <button
+                className="copy-button"
+                onClick={() => {
+                  setDraftStart("");
+                  setDraftEnd("");
+                }}
+                type="button"
+              >
+                清空
               </button>
-            ))}
-            <button
-              className="copy-button"
-              onClick={() => {
-                setDraftStart("");
-                setDraftEnd("");
-              }}
-              type="button"
-            >
-              清空
-            </button>
-          </div>
-          <div className="content-date-row">
+            </div>
             <label>
               <span>开始日期</span>
               <input type="date" value={draftStart} onChange={(event) => setDraftStart(event.target.value)} />
@@ -1664,7 +1949,21 @@ function ContentDashboard({ data, loading, filter, contentStart, contentEnd, onC
 
         <section className="panel content-trend-panel">
           <SectionHeader icon={Activity} title="笔记数据表现分布" action={<StatusPill tone="neutral">{loading && !data ? "加载中" : `${formatNumber(trendRows.length)} 天`}</StatusPill>} />
-          <ContentTrendChart rows={trendRows} />
+          <ContentTrendChart
+            rows={trendRows}
+            selectedDate={selectedTrendDate}
+            onSelectDate={(date) => {
+              setSelectedTrendDate(date);
+              setSelectedNoteId("");
+            }}
+          />
+          <DailyNoteRail
+            date={selectedTrendDate}
+            notes={selectedDayNotes}
+            selectedNoteId={selectedNoteId}
+            onSelectNote={setSelectedNoteId}
+          />
+          <NoteAnalysisBoard note={selectedNote} onClose={() => setSelectedNoteId("")} />
         </section>
 
         <section className="panel panel-table">

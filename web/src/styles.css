@@ -1171,34 +1171,34 @@ tbody tr:hover {
   margin-bottom: 0;
 }
 
-.content-range-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.content-date-row {
+.content-filter-row {
   display: grid;
-  grid-template-columns: minmax(160px, 220px) minmax(160px, 220px) minmax(180px, 1fr) auto;
+  grid-template-columns: auto minmax(150px, 190px) minmax(150px, 190px) minmax(170px, 1fr) auto;
   gap: 12px;
   align-items: end;
 }
 
-.content-date-row label,
+.content-range-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+
+.content-filter-row label,
 .content-range-meta {
   display: grid;
   gap: 5px;
 }
 
-.content-date-row label span,
+.content-filter-row label span,
 .content-range-meta span {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
 }
 
-.content-date-row input {
+.content-filter-row input {
   width: 100%;
   min-height: 38px;
   border: 1px solid var(--line);
@@ -1323,6 +1323,18 @@ tbody tr:hover {
 .content-trend-bar {
   fill: #ffe3b7;
   opacity: 0.92;
+  cursor: pointer;
+  outline: none;
+  transition:
+    fill 0.16s ease,
+    opacity 0.16s ease;
+}
+
+.content-trend-bar:hover,
+.content-trend-bar:focus,
+.content-trend-bar.selected {
+  fill: #2764cf;
+  opacity: 0.96;
 }
 
 .content-trend-tooltip {
@@ -1383,6 +1395,238 @@ tbody tr:hover {
 
 .legend-note-count {
   background: #ffe3b7;
+}
+
+.daily-note-rail {
+  margin-top: 14px;
+  border-top: 1px solid #edf0ec;
+  padding-top: 12px;
+}
+
+.daily-note-rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.daily-note-rail-head div {
+  display: grid;
+  gap: 2px;
+}
+
+.daily-note-rail-head span {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 800;
+}
+
+.daily-note-rail-head strong {
+  font-size: 15px;
+}
+
+.daily-note-strip {
+  display: grid;
+  grid-auto-columns: minmax(260px, 320px);
+  grid-auto-flow: column;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 2px 2px 10px;
+  scroll-snap-type: x proximity;
+}
+
+.daily-note-card {
+  display: grid;
+  grid-template-rows: auto minmax(38px, auto) minmax(58px, auto) auto;
+  gap: 8px;
+  min-height: 190px;
+  padding: 11px;
+  border: 1px solid #e1e7e0;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  text-align: left;
+  scroll-snap-align: start;
+}
+
+.daily-note-card:hover,
+.daily-note-card.active {
+  border-color: #9eb7f5;
+  background: #f8fbff;
+}
+
+.daily-note-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.daily-note-card-top > span:last-child {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 760;
+  white-space: nowrap;
+}
+
+.daily-note-card > strong {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 13.5px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.daily-note-card > p {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.daily-note-metrics,
+.note-analysis-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.note-metric-chip {
+  display: inline-grid;
+  gap: 2px;
+  min-width: 54px;
+  padding: 6px 8px;
+  border: 1px solid #edf0ec;
+  border-radius: 7px;
+  background: #fbfcfa;
+}
+
+.note-metric-chip em {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 780;
+}
+
+.note-metric-chip strong {
+  font-size: 13px;
+  line-height: 1.1;
+}
+
+.daily-note-empty {
+  min-height: 84px;
+}
+
+.note-analysis-board {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #edf0ec;
+}
+
+.note-analysis-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  margin-bottom: 12px;
+}
+
+.note-analysis-kicker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+
+.note-analysis-head h3 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.note-analysis-head p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.note-analysis-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.note-detail-block {
+  min-width: 0;
+  min-height: 142px;
+  padding: 11px;
+  border: 1px solid #edf0ec;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.note-detail-block h3 {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.note-detail-block p {
+  margin: 0 0 7px;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.note-detail-block p:last-child {
+  margin-bottom: 0;
+}
+
+.note-inline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.note-inline-meta span,
+.note-tag-line span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 7px;
+  border: 1px solid #e2e7e1;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 760;
+}
+
+.note-tag-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.structured-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.structured-list li {
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 
 .content-insight-grid {
@@ -2287,8 +2531,18 @@ tbody tr:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .content-date-row {
-    grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr);
+  .content-filter-row {
+    grid-template-columns: repeat(2, minmax(160px, 1fr));
+  }
+
+  .content-range-actions,
+  .content-range-meta,
+  .content-apply-button {
+    align-self: stretch;
+  }
+
+  .note-analysis-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -2352,8 +2606,22 @@ tbody tr:hover {
     min-height: 92px;
   }
 
-  .content-date-row,
+  .content-filter-row,
   .persona-pie-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .daily-note-rail-head,
+  .note-analysis-head {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .daily-note-card {
+    min-height: 184px;
+  }
+
+  .note-analysis-grid {
     grid-template-columns: 1fr;
   }
 
