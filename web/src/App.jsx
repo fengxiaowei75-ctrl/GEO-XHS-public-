@@ -183,11 +183,11 @@ function formatBucket(value) {
   return dateFormatter.format(date);
 }
 
-function LineChart({ rows, seriesKey, valueKey = "calls_total", emptyLabel = "暂无曲线数据" }) {
+function LineChart({ rows, seriesKey, valueKey = "calls_total", bucketLabel = "时间桶", yLabel = "调用次数", emptyLabel = "暂无曲线数据" }) {
   const prepared = useMemo(() => {
     const buckets = [...new Set(rows.map((item) => item.bucket_start))].sort();
     const series = [...new Set(rows.map((item) => item[seriesKey] || item.provider_code || "unknown"))].slice(0, 6);
-    const maxValue = Math.max(1, ...rows.map((item) => Number(item[valueKey] || 0)));
+    const maxValue = Math.max(1, Math.ceil(Math.max(...rows.map((item) => Number(item[valueKey] || 0)))));
     const bucketIndex = new Map(buckets.map((bucket, index) => [bucket, index]));
     const width = 720;
     const height = 260;
@@ -197,7 +197,7 @@ function LineChart({ rows, seriesKey, valueKey = "calls_total", emptyLabel = "�
     const padBottom = 38;
     const innerW = width - padLeft - padRight;
     const innerH = height - padTop - padBottom;
-    const yTicks = [0, maxValue / 2, maxValue];
+    const yTicks = [...new Set([0, Math.ceil(maxValue / 2), maxValue])];
     const xTicks = buckets.filter((_, index) => {
       if (buckets.length <= 3) return true;
       return index === 0 || index === Math.floor((buckets.length - 1) / 2) || index === buckets.length - 1;
@@ -239,6 +239,12 @@ function LineChart({ rows, seriesKey, valueKey = "calls_total", emptyLabel = "�
           );
         })}
         <line x1={prepared.padLeft} x2={prepared.padLeft} y1={prepared.padTop} y2={prepared.height - prepared.padBottom} className="chart-axis" />
+        <text x={prepared.padLeft} y={12} className="chart-axis-title">
+          纵轴：{yLabel}
+        </text>
+        <text x={prepared.width - prepared.padRight} y={prepared.height - 12} textAnchor="end" className="chart-axis-title">
+          横轴：{bucketLabel}
+        </text>
         {prepared.paths.map((path) => (
           <path key={path.name} d={path.d} fill="none" stroke={path.color} strokeWidth="3" strokeLinecap="round" />
         ))}
@@ -259,7 +265,9 @@ function LineChart({ rows, seriesKey, valueKey = "calls_total", emptyLabel = "�
           </span>
         ))}
       </div>
-      <div className="chart-scale">纵轴：{valueKey === "total_tokens" ? "tokens" : "调用次数"} · 峰值 {formatCompact(prepared.maxValue)}</div>
+      <div className="chart-scale">
+        横轴：{bucketLabel} · 纵轴：{yLabel} · 峰值 {formatCompact(prepared.maxValue)}
+      </div>
     </div>
   );
 }
@@ -515,7 +523,12 @@ function OpsDashboard({ data }) {
               </div>
             }
           />
-          <LineChart rows={filteredUsage} seriesKey="provider_code" />
+          <LineChart
+            rows={filteredUsage}
+            seriesKey="provider_code"
+            bucketLabel={range === "hourly" ? "小时" : range === "daily" ? "日期" : "周"}
+            yLabel="调用次数"
+          />
         </section>
 
         <section className="panel ops-chart">
@@ -524,7 +537,12 @@ function OpsDashboard({ data }) {
             title="大模型与 Embedding 曲线"
             action={<SelectControl value={model} onChange={setModel} options={modelOptions} label="模型" />}
           />
-          <LineChart rows={modelUsage} seriesKey="model_name" />
+          <LineChart
+            rows={modelUsage}
+            seriesKey="model_name"
+            bucketLabel={range === "hourly" ? "小时" : range === "daily" ? "日期" : "周"}
+            yLabel="调用次数"
+          />
         </section>
       </section>
 

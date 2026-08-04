@@ -140,6 +140,8 @@ module.exports = async function handler(req, res) {
   try {
     const [
       overviewRows,
+      recentApiCalls,
+      apiFailureReasons,
       queueStatus,
       topFresh,
       personaDistribution,
@@ -151,8 +153,6 @@ module.exports = async function handler(req, res) {
       failedQueue,
       opsOverviewRows,
       apiStatusSummary,
-      recentApiCalls,
-      apiFailureReasons,
       apiUsageHourly,
       apiUsageDaily,
       apiUsageWeekly,

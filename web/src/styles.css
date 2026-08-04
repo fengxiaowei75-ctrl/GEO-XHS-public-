@@ -657,6 +657,12 @@ tbody tr:hover {
   font-weight: 700;
 }
 
+.chart-axis-title {
+  fill: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .chart-x-label {
   font-size: 10px;
 }
