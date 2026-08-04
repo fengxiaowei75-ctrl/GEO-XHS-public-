@@ -1120,7 +1120,7 @@ function OpsDashboard({ data }) {
         <section className="panel ops-chart">
           <SectionHeader
             icon={Brain}
-            title="大模型与 Embedding 曲线"
+            title="大模型与 Embedding Tokens"
             action={<SelectControl value={model} onChange={setModel} options={modelOptions} label="模型" />}
           />
           <LineChart
@@ -1129,8 +1129,10 @@ function OpsDashboard({ data }) {
             seriesLabelKey="model_label"
             seriesDomain={modelSeriesDomain}
             bucketDomain={bucketDomain}
+            valueKey="total_tokens"
             bucketLabel={rangeLabel}
-            yLabel="调用次数"
+            yLabel="Tokens 消耗量"
+            emptyLabel="暂无 tokens 消耗数据"
           />
         </section>
       </section>
