@@ -46,7 +46,7 @@ const navItems = [
 
 const chartColors = ["#2764cf", "#087b76", "#a85e00", "#7153b8", "#bc3d3a", "#26814f"];
 const providerLabels = {
-  endata_xhs_note_detail: "Endata 详情抓取（按笔记ID抓标题/正文/互动）",
+  endata_xhs_note_detail: "艺恩详情 API 调用（按 note_id 抓标题/正文/互动）",
   volcengine_ark_vision: "豆包图片解析（首图/子图视觉信息）",
   volcengine_ark_chat: "豆包内容资产总结（痛点/人群/漏斗标签）",
   volcengine_ark_embedding: "豆包 Embedding（内容资产转向量）",

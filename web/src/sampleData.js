@@ -115,7 +115,7 @@ export const sampleDashboard = {
     apiStatusSummary: [
       {
         provider_code: "endata_xhs_note_detail",
-        display_name_cn: "Endata 小红书笔记详情",
+        display_name_cn: "艺恩详情 API 调用",
         provider_type: "detail_api",
         billing_unit: "call",
         calls_total: 200,
@@ -193,7 +193,7 @@ export const sampleDashboard = {
       {
         api_call_id: 1220,
         provider_code: "endata_xhs_note_detail",
-        display_name_cn: "Endata 小红书笔记详情",
+        display_name_cn: "艺恩详情 API 调用",
         provider_type: "detail_api",
         operation: "historical_note_detail_fetch",
         status: "failed",
@@ -285,8 +285,8 @@ export const sampleDashboard = {
       endpoints: [
         {
           url: "/v2/xhs/getstandardnoteinfo",
-          display_name_cn: "小红书笔记详情",
-          description_cn: "按 note_id 拉取标题、正文、发布时间、互动量、图片和视频封面，是爆文判断与资产拆解的基础数据。",
+          display_name_cn: "艺恩详情 API 调用",
+          description_cn: "按 note_id 拉取标题、正文、发布时间、互动量、图片和视频封面；通常由笔记全流程编排在缺少成功详情时调用一次。",
           count: 6925,
           previous_count: 6924,
           count_delta: 1,
@@ -294,7 +294,7 @@ export const sampleDashboard = {
           sampled_at: "2026-08-04T06:36:00.000Z",
           scripts: [
             { script_key: "watch_geo_note_ingest_queue", display_name_cn: "GEO 笔记队列 worker", scope: "GEO 新笔记入库" },
-            { script_key: "sync_xhs_note_by_id", display_name_cn: "GEO 单条笔记编排入口", scope: "GEO 单条补全" },
+            { script_key: "sync_xhs_note_by_id", display_name_cn: "笔记全流程编排（缺详情才调艺恩）", scope: "GEO 单条补全" },
             { script_key: "xhs_author_pipeline", display_name_cn: "麦富迪作者管线", scope: "麦富迪作者笔记详情" },
           ],
         },
@@ -333,9 +333,9 @@ export const sampleDashboard = {
         },
       ],
       endpointHistory: [
-        { bucket_start: "2026-08-04T06:34:00.000Z", url: "/v2/xhs/getstandardnoteinfo", display_name_cn: "小红书笔记详情", count: 6923, share_pct: 90.16 },
-        { bucket_start: "2026-08-04T06:35:00.000Z", url: "/v2/xhs/getstandardnoteinfo", display_name_cn: "小红书笔记详情", count: 6924, share_pct: 90.16 },
-        { bucket_start: "2026-08-04T06:36:00.000Z", url: "/v2/xhs/getstandardnoteinfo", display_name_cn: "小红书笔记详情", count: 6925, share_pct: 90.16 },
+        { bucket_start: "2026-08-04T06:34:00.000Z", url: "/v2/xhs/getstandardnoteinfo", display_name_cn: "艺恩详情 API 调用", count: 6923, share_pct: 90.16 },
+        { bucket_start: "2026-08-04T06:35:00.000Z", url: "/v2/xhs/getstandardnoteinfo", display_name_cn: "艺恩详情 API 调用", count: 6924, share_pct: 90.16 },
+        { bucket_start: "2026-08-04T06:36:00.000Z", url: "/v2/xhs/getstandardnoteinfo", display_name_cn: "艺恩详情 API 调用", count: 6925, share_pct: 90.16 },
         { bucket_start: "2026-08-04T06:34:00.000Z", url: "/v2/xhs/getstandardusernotelist", display_name_cn: "账号笔记列表", count: 477, share_pct: 6.21 },
         { bucket_start: "2026-08-04T06:35:00.000Z", url: "/v2/xhs/getstandardusernotelist", display_name_cn: "账号笔记列表", count: 477, share_pct: 6.21 },
         { bucket_start: "2026-08-04T06:36:00.000Z", url: "/v2/xhs/getstandardusernotelist", display_name_cn: "账号笔记列表", count: 477, share_pct: 6.21 },
@@ -347,8 +347,8 @@ export const sampleDashboard = {
         { bucket_start: "2026-08-04T06:36:00.000Z", url: "/v2/xhs/getstandardcommentinfo", display_name_cn: "小红书笔记评论信息", count: 17, share_pct: 0.22 },
       ],
       scriptUsageHourly: [
-        { bucket_start: "2026-08-04T04:00:00.000Z", script_key: "watch_geo_note_ingest_queue", display_name_cn: "GEO 笔记队列 worker", url: "/v2/xhs/getstandardnoteinfo", endpoint_display_name_cn: "小红书笔记详情", operation: "note_detail_fetch", calls_total: 6, calls_success: 6, calls_failed: 0 },
-        { bucket_start: "2026-08-04T05:00:00.000Z", script_key: "watch_geo_note_ingest_queue", display_name_cn: "GEO 笔记队列 worker", url: "/v2/xhs/getstandardnoteinfo", endpoint_display_name_cn: "小红书笔记详情", operation: "note_detail_fetch", calls_total: 11, calls_success: 10, calls_failed: 1 },
+        { bucket_start: "2026-08-04T04:00:00.000Z", script_key: "watch_geo_note_ingest_queue", display_name_cn: "GEO 笔记队列 worker", url: "/v2/xhs/getstandardnoteinfo", endpoint_display_name_cn: "艺恩详情 API 调用", operation: "note_detail_fetch", calls_total: 6, calls_success: 6, calls_failed: 0 },
+        { bucket_start: "2026-08-04T05:00:00.000Z", script_key: "watch_geo_note_ingest_queue", display_name_cn: "GEO 笔记队列 worker", url: "/v2/xhs/getstandardnoteinfo", endpoint_display_name_cn: "艺恩详情 API 调用", operation: "note_detail_fetch", calls_total: 11, calls_success: 10, calls_failed: 1 },
         { bucket_start: "2026-08-04T06:00:00.000Z", script_key: "sync_xhs_maifudi_notes", display_name_cn: "麦富迪品牌笔记同步", url: "/v2/xhs/getxhsnotelist_gb", endpoint_display_name_cn: "品牌/关键词笔记列表", operation: "brand_note_list_fetch", calls_total: 3, calls_success: 3, calls_failed: 0 },
       ],
     },
@@ -359,7 +359,7 @@ export const sampleDashboard = {
       { model_config_id: 4, provider_code: "volcengine_ark_embedding", provider_display_name_cn: "火山 Ark Embedding", model_name: "doubao-embedding-vision-251215", display_name_cn: "豆包内容资产 Embedding", model_role: "embedding", is_default: true, is_active: true, dimensions: 2048 },
     ],
     credentials: [
-      { credential_id: 1, provider_code: "endata_xhs_note_detail", provider_display_name_cn: "Endata 小红书笔记详情", credential_name: "Endata 默认 Token", secret_ref: "ENDATA_TOKEN", secret_mask: "ENDATA_TOKEN", status: "active", is_default: true },
+      { credential_id: 1, provider_code: "endata_xhs_note_detail", provider_display_name_cn: "艺恩详情 API 调用", credential_name: "艺恩 Endata 默认 Token", secret_ref: "ENDATA_TOKEN", secret_mask: "ENDATA_TOKEN", status: "active", is_default: true },
       { credential_id: 2, provider_code: "kimi_chat", provider_display_name_cn: "Kimi 历史内容资产总结", credential_name: "Kimi 历史 Key", secret_ref: "KIMI_API_KEY", secret_mask: "KIMI_API_KEY", status: "disabled", is_default: false },
       { credential_id: 4, provider_code: "volcengine_ark_chat", provider_display_name_cn: "豆包内容资产总结", credential_name: "豆包内容资产总结 Key", secret_ref: "GEO_CONTENT_API_KEY", secret_mask: "GEO_CONTENT_API_KEY", status: "active", is_default: true },
       { credential_id: 3, provider_code: "volcengine_ark_vision", provider_display_name_cn: "火山 Ark 图片多模态解析", credential_name: "Ark 默认 Key", secret_ref: "ARK_API_KEY", secret_mask: "ARK_API_KEY", status: "active", is_default: true },

@@ -6,11 +6,11 @@ const requiredEnv = ["PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD"];
 
 const endataEndpointMeta = {
   "/v2/xhs/getstandardnoteinfo": {
-    display_name_cn: "小红书笔记详情",
-    description_cn: "按 note_id 拉取标题、正文、发布时间、互动量、图片和视频封面，是爆文判断与资产拆解的基础数据。",
+    display_name_cn: "艺恩详情 API 调用",
+    description_cn: "按 note_id 拉取标题、正文、发布时间、互动量、图片和视频封面；通常由笔记全流程编排在缺少成功详情时调用一次。",
     scripts: [
       { script_key: "watch_geo_note_ingest_queue", display_name_cn: "GEO 笔记队列 worker", scope: "GEO 新笔记入库" },
-      { script_key: "sync_xhs_note_by_id", display_name_cn: "GEO 单条笔记编排入口", scope: "GEO 单条补全" },
+      { script_key: "sync_xhs_note_by_id", display_name_cn: "笔记全流程编排（缺详情才调艺恩）", scope: "GEO 单条补全" },
       { script_key: "xhs_author_pipeline", display_name_cn: "麦富迪作者管线", scope: "麦富迪作者笔记详情" },
     ],
   },
@@ -208,8 +208,8 @@ function sampleData() {
         endpoints: [
           {
             url: "/v2/xhs/getstandardnoteinfo",
-            display_name_cn: "小红书笔记详情",
-            description_cn: "按 note_id 拉取标题、正文、发布时间、互动量、图片和视频封面，是爆文判断与资产拆解的基础数据。",
+            display_name_cn: "艺恩详情 API 调用",
+            description_cn: "按 note_id 拉取标题、正文、发布时间、互动量、图片和视频封面；通常由笔记全流程编排在缺少成功详情时调用一次。",
             count: 6925,
             previous_count: 6924,
             count_delta: 1,
@@ -252,9 +252,9 @@ function sampleData() {
           },
         ],
         endpointHistory: [
-          { bucket_start: "2026-08-04T06:34:00.000Z", url: "/v2/xhs/getstandardnoteinfo", display_name_cn: "小红书笔记详情", count: 6923, share_pct: 90.16 },
-          { bucket_start: "2026-08-04T06:35:00.000Z", url: "/v2/xhs/getstandardnoteinfo", display_name_cn: "小红书笔记详情", count: 6924, share_pct: 90.16 },
-          { bucket_start: "2026-08-04T06:36:00.000Z", url: "/v2/xhs/getstandardnoteinfo", display_name_cn: "小红书笔记详情", count: 6925, share_pct: 90.16 },
+          { bucket_start: "2026-08-04T06:34:00.000Z", url: "/v2/xhs/getstandardnoteinfo", display_name_cn: "艺恩详情 API 调用", count: 6923, share_pct: 90.16 },
+          { bucket_start: "2026-08-04T06:35:00.000Z", url: "/v2/xhs/getstandardnoteinfo", display_name_cn: "艺恩详情 API 调用", count: 6924, share_pct: 90.16 },
+          { bucket_start: "2026-08-04T06:36:00.000Z", url: "/v2/xhs/getstandardnoteinfo", display_name_cn: "艺恩详情 API 调用", count: 6925, share_pct: 90.16 },
           { bucket_start: "2026-08-04T06:34:00.000Z", url: "/v2/xhs/getstandardusernotelist", display_name_cn: "账号笔记列表", count: 477, share_pct: 6.21 },
           { bucket_start: "2026-08-04T06:35:00.000Z", url: "/v2/xhs/getstandardusernotelist", display_name_cn: "账号笔记列表", count: 477, share_pct: 6.21 },
           { bucket_start: "2026-08-04T06:36:00.000Z", url: "/v2/xhs/getstandardusernotelist", display_name_cn: "账号笔记列表", count: 477, share_pct: 6.21 },
@@ -268,7 +268,7 @@ function sampleData() {
             script_key: "watch_geo_note_ingest_queue",
             display_name_cn: "GEO 笔记队列 worker",
             url: "/v2/xhs/getstandardnoteinfo",
-            endpoint_display_name_cn: "小红书笔记详情",
+            endpoint_display_name_cn: "艺恩详情 API 调用",
             operation: "note_detail_fetch",
             calls_total: 8,
             calls_success: 8,
