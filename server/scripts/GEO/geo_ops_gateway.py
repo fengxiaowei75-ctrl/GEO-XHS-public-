@@ -41,6 +41,10 @@ _CURRENT_SCRIPT_RUN_ID = None
 _SIGNAL_HANDLERS_INSTALLED = False
 
 
+class RateLimitError(RuntimeError):
+    pass
+
+
 def load_env_file(path=None):
     values = {}
     env_path = Path(path or DEFAULT_ENV_FILE)
@@ -483,6 +487,102 @@ LIMIT 1
     return model_config_id, credential_id
 
 
+def matching_rate_limit_rules(conn, provider_code, model_config_id=None, credential_id=None):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+SELECT rule_id, rule_name, period_seconds, max_calls, max_tokens, max_estimated_cost, hard_block,
+       provider_code, model_config_id, credential_id
+FROM public.geo_ops_rate_limit_rules
+WHERE is_enabled
+  AND (provider_code IS NULL OR provider_code = %(provider_code)s)
+  AND (model_config_id IS NULL OR model_config_id = %(model_config_id)s)
+  AND (credential_id IS NULL OR credential_id = %(credential_id)s)
+ORDER BY hard_block DESC, period_seconds ASC, rule_id ASC
+""",
+            {
+                "provider_code": provider_code,
+                "model_config_id": model_config_id,
+                "credential_id": credential_id,
+            },
+        )
+        return cur.fetchall()
+
+
+def usage_for_rule(conn, rule):
+    (
+        _rule_id,
+        _rule_name,
+        period_seconds,
+        _max_calls,
+        _max_tokens,
+        _max_estimated_cost,
+        _hard_block,
+        provider_code,
+        model_config_id,
+        credential_id,
+    ) = rule
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+SELECT
+  count(*)::integer AS calls_total,
+  COALESCE(sum(total_tokens), 0)::bigint AS tokens_total,
+  COALESCE(sum(estimated_cost), 0)::numeric AS estimated_cost
+FROM public.geo_ops_api_call_logs
+WHERE started_at >= now() - ((%(period_seconds)s::text || ' seconds')::interval)
+  AND (%(provider_code)s IS NULL OR provider_code = %(provider_code)s)
+  AND (%(model_config_id)s IS NULL OR model_config_id = %(model_config_id)s)
+  AND (%(credential_id)s IS NULL OR credential_id = %(credential_id)s)
+""",
+            {
+                "period_seconds": period_seconds,
+                "provider_code": provider_code,
+                "model_config_id": model_config_id,
+                "credential_id": credential_id,
+            },
+        )
+        return cur.fetchone()
+
+
+def check_rate_limits(provider_code, model_name=None):
+    try:
+        conn = db_connect()
+        if conn is None:
+            return None
+        try:
+            model_config_id, credential_id = resolve_model_and_credential(conn, provider_code, model_name)
+            rules = matching_rate_limit_rules(conn, provider_code, model_config_id, credential_id)
+            for rule in rules:
+                rule_id, rule_name, period_seconds, max_calls, max_tokens, max_estimated_cost, hard_block, *_ = rule
+                calls_total, tokens_total, estimated_cost = usage_for_rule(conn, rule)
+                exceeded = []
+                if max_calls is not None and calls_total >= max_calls:
+                    exceeded.append(f"calls {calls_total}/{max_calls}")
+                if max_tokens is not None and tokens_total >= max_tokens:
+                    exceeded.append(f"tokens {tokens_total}/{max_tokens}")
+                if max_estimated_cost is not None and estimated_cost >= max_estimated_cost:
+                    exceeded.append(f"cost {estimated_cost}/{max_estimated_cost}")
+                if exceeded:
+                    message = f"rate limit rule {rule_name} exceeded: {', '.join(exceeded)}"
+                    payload = {
+                        "rule_id": rule_id,
+                        "rule_name": rule_name,
+                        "period_seconds": period_seconds,
+                        "hard_block": hard_block,
+                        "provider_code": provider_code,
+                        "model_name": model_name,
+                    }
+                    insert_event(level="warning", event_type="rate_limit_exceeded", message=message, payload=payload)
+                    if hard_block:
+                        return {"blocked": True, "error": message, "payload": payload}
+        finally:
+            conn.close()
+    except Exception as exc:
+        warn(f"check_rate_limits skipped: {exc}")
+    return None
+
+
 def record_api_call(
     provider_code,
     operation,
@@ -595,6 +695,31 @@ def call_api(
     metadata=None,
     **kwargs,
 ):
+    limit_decision = check_rate_limits(provider_code, model_name=model_name)
+    if limit_decision and limit_decision.get("blocked"):
+        now = datetime.now(timezone.utc)
+        record_api_call(
+            provider_code=provider_code,
+            operation=operation,
+            method=method,
+            url=url,
+            status="rate_limited",
+            started_at=now,
+            finished_at=now,
+            latency_ms=0,
+            attempt_no=attempt_no,
+            max_attempts=max_attempts,
+            model_name=model_name,
+            note_id=note_id,
+            asset_id=asset_id,
+            image_analysis_id=image_analysis_id,
+            image_url=image_url,
+            error_code="gateway_rate_limit",
+            error_message=limit_decision["error"],
+            metadata={**(metadata or {}), "rate_limit": limit_decision.get("payload") or {}},
+        )
+        raise RateLimitError(limit_decision["error"])
+
     started_mono = time.monotonic()
     started_at = datetime.now(timezone.utc)
     response = None
