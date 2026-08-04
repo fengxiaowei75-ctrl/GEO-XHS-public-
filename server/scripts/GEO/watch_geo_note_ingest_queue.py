@@ -35,7 +35,7 @@ DEFAULT_LISTEN_CHANNEL = "geo_note_ingest_queue_changed"
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Continuously process GEO note_id queue: detail fetch, image analysis, Kimi asset, pgvector refresh."
+        description="Continuously process GEO note_id queue: detail fetch, image analysis, content asset, pgvector refresh."
     )
     parser.add_argument("--queue-table", default=DEFAULT_QUEUE_TABLE)
     parser.add_argument("--detail-table", default=DEFAULT_DETAIL_TABLE)

@@ -28,10 +28,10 @@ DEFAULT_IMAGE_TABLE = "public.image_analysis"
 DEFAULT_ASSET_TABLE = "public.geo_note_content_assets"
 DEFAULT_RUN_TABLE = "public.geo_note_content_asset_runs"
 
-DEFAULT_KIMI_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
-DEFAULT_KIMI_MODEL = "doubao-seed-2-0-mini-260428"
-DEFAULT_KIMI_TEMPERATURE = 0.6
-DEFAULT_KIMI_THINKING = "disabled"
+DEFAULT_CONTENT_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
+DEFAULT_CONTENT_MODEL = "doubao-seed-2-0-mini-260428"
+DEFAULT_CONTENT_TEMPERATURE = 0.6
+DEFAULT_CONTENT_THINKING = "disabled"
 DEFAULT_PROMPT_VERSION = "geo_note_asset_v1"
 
 PERSONA_CHOICES = {
@@ -50,7 +50,7 @@ INFORMATION_DENSITY_CHOICES = {"低密度", "中密度", "高密度", "超高密
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Build note-level GEO content assets from note_details and image_analysis with Kimi."
+        description="Build note-level GEO content assets from note_details and image_analysis with the configured content model."
     )
     parser.add_argument("--detail-table", default=DEFAULT_DETAIL_TABLE)
     parser.add_argument("--image-table", default=DEFAULT_IMAGE_TABLE)
@@ -67,12 +67,12 @@ def parse_args():
     parser.add_argument("--prompt-version", default=DEFAULT_PROMPT_VERSION)
     parser.add_argument("--max-images-per-note", type=int, default=20)
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--skip-llm", action="store_true", help="Build payload and skip Kimi call/write asset.")
-    parser.add_argument("--kimi-api-key", default="")
-    parser.add_argument("--kimi-base-url", default="")
-    parser.add_argument("--kimi-model", default="")
-    parser.add_argument("--kimi-temperature", type=float, default=None)
-    parser.add_argument("--kimi-thinking", choices=["disabled", "auto"], default="")
+    parser.add_argument("--skip-llm", action="store_true", help="Build payload and skip content model call/write asset.")
+    parser.add_argument("--content-api-key", "--kimi-api-key", dest="kimi_api_key", default="")
+    parser.add_argument("--content-base-url", "--kimi-base-url", dest="kimi_base_url", default="")
+    parser.add_argument("--content-model", "--kimi-model", dest="kimi_model", default="")
+    parser.add_argument("--content-temperature", "--kimi-temperature", dest="kimi_temperature", type=float, default=None)
+    parser.add_argument("--content-thinking", "--kimi-thinking", dest="kimi_thinking", choices=["disabled", "auto"], default="")
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--retries", type=int, default=3)
     parser.add_argument("--retry-sleep", type=float, default=2.0)
@@ -121,17 +121,28 @@ def enrich_args(args):
         or values.get("GEO_CONTENT_MODEL")
         or values.get("ARK_CHAT_MODEL")
         or values.get("KIMI_MODEL")
-        or DEFAULT_KIMI_MODEL
+        or DEFAULT_CONTENT_MODEL
     )
     args.kimi_thinking = (
         args.kimi_thinking
+        or os.environ.get("GEO_CONTENT_THINKING")
+        or os.environ.get("ARK_CHAT_THINKING")
         or os.environ.get("KIMI_THINKING")
+        or values.get("GEO_CONTENT_THINKING")
+        or values.get("ARK_CHAT_THINKING")
         or values.get("KIMI_THINKING")
-        or DEFAULT_KIMI_THINKING
+        or DEFAULT_CONTENT_THINKING
     )
     if getattr(args, "kimi_temperature", None) is None:
-        temperature = os.environ.get("KIMI_TEMPERATURE") or values.get("KIMI_TEMPERATURE")
-        args.kimi_temperature = float(temperature) if temperature else DEFAULT_KIMI_TEMPERATURE
+        temperature = (
+            os.environ.get("GEO_CONTENT_TEMPERATURE")
+            or os.environ.get("ARK_CHAT_TEMPERATURE")
+            or os.environ.get("KIMI_TEMPERATURE")
+            or values.get("GEO_CONTENT_TEMPERATURE")
+            or values.get("ARK_CHAT_TEMPERATURE")
+            or values.get("KIMI_TEMPERATURE")
+        )
+        args.kimi_temperature = float(temperature) if temperature else DEFAULT_CONTENT_TEMPERATURE
     args.kimi_base_url = (
         args.kimi_base_url
         or os.environ.get("GEO_CONTENT_BASE_URL")
@@ -142,7 +153,7 @@ def enrich_args(args):
         or values.get("ARK_CHAT_BASE_URL")
         or values.get("KIMI_BASE_URL")
         or values.get("MOONSHOT_BASE_URL")
-        or DEFAULT_KIMI_BASE_URL
+        or DEFAULT_CONTENT_BASE_URL
     ).rstrip("/")
     if not args.dry_run and not args.db_password:
         raise RuntimeError("Missing database password. Set PGPASSWORD or --db-password.")
@@ -783,7 +794,7 @@ def call_kimi(args, system_prompt, user_prompt):
                 break
             time.sleep(args.retry_sleep * (attempt + 1))
     latency_ms = int((time.monotonic() - started) * 1000)
-    raise RuntimeError(f"Kimi call failed after retries: {last_error}") from last_error
+    raise RuntimeError(f"Content model call failed after retries: {last_error}") from last_error
 
 
 def fallback_asset_text(note, parsed):

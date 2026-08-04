@@ -8,7 +8,7 @@ server/    云服务器后台脚本、systemd 服务、数据库 migration、加
 docs/      可选：数据库字段、内容逻辑、Agent skill、分析文档
 ```
 
-生产数据通过同一个 PostgreSQL 数据库 `xhs_geo` 和 pgvector 表交换。Vercel 不运行抓取、图片解析、Kimi 总结、向量刷新等后台任务；云服务器也不负责提供网站 UI。
+生产数据通过同一个 PostgreSQL 数据库 `xhs_geo` 和 pgvector 表交换。Vercel 不运行抓取、图片解析、内容资产总结、向量刷新等后台任务；云服务器也不负责提供网站 UI。
 
 ## 当前运行环境
 

@@ -19,7 +19,7 @@ systemctl status xhs-geo-note-ingest-queue.service --no-pager
 systemctl status xhs-geo-asset-vector.service --no-pager
 ```
 
-- `xhs-geo-note-ingest-queue.service`: 监听 `geo_note_ingest_queue`，自动抓取笔记详情、处理图片、调用 Kimi 总结并刷新资产。
+- `xhs-geo-note-ingest-queue.service`: 监听 `geo_note_ingest_queue`，自动抓取笔记详情、处理图片、调用豆包/Ark 内容模型总结并刷新资产。
 - `xhs-geo-asset-vector.service`: 监听内容资产更新，持续刷新 pgvector 向量。
 
 ## Secrets

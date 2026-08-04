@@ -831,7 +831,13 @@ function ContentDashboard({ data, loading, filter }) {
     <>
       <section className="stats-grid">
         <Stat icon={Database} label="详情成功" value={formatNumber(overview.noteDetailSuccess)} sub={`失败 ${formatNumber(overview.noteDetailFailed || 0)}`} />
-        <Stat icon={Brain} label="内容资产" value={formatNumber(overview.assetSuccess)} sub={`总结成功 ${formatNumber(overview.kimiSuccessRuns)}`} tone="teal" />
+        <Stat
+          icon={Brain}
+          label="内容资产"
+          value={formatNumber(overview.assetSuccess)}
+          sub={`豆包总结成功 ${formatNumber(overview.contentAssetSuccessRuns ?? overview.kimiSuccessRuns)}`}
+          tone="teal"
+        />
         <Stat icon={Layers3} label="向量资产" value={formatNumber(overview.vectorCount)} sub="pgvector halfvec(2048)" tone="purple" />
         <Stat icon={Activity} label="队列完成" value={formatNumber(queueSuccess)} sub={queueFailed ? `失败 ${formatNumber(queueFailed)}` : "实时 worker active"} tone="amber" />
       </section>
@@ -1310,7 +1316,7 @@ function ModelConfigView({ data }) {
   return (
     <>
       <section className="stats-grid stats-grid-three">
-        <Stat icon={Brain} label="模型配置" value={formatNumber((ops.modelConfigs || []).length)} sub="chat / vision / embedding" />
+        <Stat icon={Brain} label="模型配置" value={formatNumber((ops.modelConfigs || []).length)} sub="豆包 chat / vision / embedding" />
         <Stat icon={KeyRound} label="Key 元数据" value={formatNumber((ops.credentials || []).length)} sub="只展示 secret_ref 和 mask" tone="teal" />
         <Stat icon={Gauge} label="限流规则" value={formatNumber((ops.rateLimitRules || []).length)} sub="provider / model / key" tone="amber" />
       </section>

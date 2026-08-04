@@ -6,8 +6,8 @@ export const sampleDashboard = {
     noteDetailFailed: 110,
     assetSuccess: 90,
     vectorCount: 90,
-    kimiSuccessRuns: 90,
-    kimiFailedRuns: 6,
+    contentAssetSuccessRuns: 90,
+    contentAssetFailedRuns: 6,
     minPublishTime: "2024-11-08T00:00:00.000Z",
     maxPublishTime: "2026-07-31T00:00:00.000Z",
   },
@@ -91,7 +91,7 @@ export const sampleDashboard = {
     {
       run_id: 96,
       note_id: "6a637720000000001c0103b3",
-      model_name: "kimi-k2.6",
+      model_name: "doubao-seed-2-0-mini-260428",
       status: "success",
       latency_ms: 50002,
       created_at: "2026-08-04T02:06:17.122Z",
@@ -110,7 +110,7 @@ export const sampleDashboard = {
       totalTokens: 1018740,
       runningScripts: 2,
       activeProviders: 6,
-      activeModels: 3,
+      activeModels: 4,
     },
     apiStatusSummary: [
       {
@@ -261,7 +261,8 @@ export const sampleDashboard = {
       weekly: [],
     },
     modelUsageSummary: [
-      { model_name: "kimi-k2.6", display_name_cn: "Kimi K2.6 内容资产总结", provider_code: "kimi_chat", provider_type: "llm_chat", model_role: "llm_chat", calls_total: 96, calls_failed: 6, total_tokens: 1018740 },
+      { model_name: "kimi-k2.6", display_name_cn: "Kimi K2.6 历史内容资产总结", provider_code: "kimi_chat", provider_type: "llm_chat", model_role: "llm_chat", calls_total: 96, calls_failed: 6, total_tokens: 1018740 },
+      { model_name: "doubao-seed-2-0-mini-260428", display_name_cn: "豆包 Seed 2.0 Mini 内容资产总结", provider_code: "volcengine_ark_chat", provider_type: "llm_chat", model_role: "llm_chat", calls_total: 1, calls_failed: 0, total_tokens: 13246 },
       { model_name: "doubao-seed-2-0-mini-260428", display_name_cn: "豆包图片多模态解析", provider_code: "volcengine_ark_vision", provider_type: "llm_vision", model_role: "llm_vision", calls_total: 834, calls_failed: 23, total_tokens: 0 },
       { model_name: "doubao-embedding-vision-251215", display_name_cn: "豆包内容资产 Embedding", provider_code: "volcengine_ark_embedding", provider_type: "embedding", model_role: "embedding", calls_total: 90, calls_failed: 0, total_tokens: 0 },
     ],
@@ -277,13 +278,15 @@ export const sampleDashboard = {
       { event_id: 202, script_key: "watch_geo_note_ingest_queue", display_name_cn: "笔记队列常驻 worker", event_time: "2026-08-04T04:48:57.000Z", level: "info", event_type: "enqueue_existing", message: "历史笔记入队完成", payload: { count: 0 } },
     ],
     modelConfigs: [
-      { model_config_id: 1, provider_code: "kimi_chat", provider_display_name_cn: "Kimi 内容资产总结", model_name: "kimi-k2.6", display_name_cn: "Kimi K2.6 内容资产总结", model_role: "llm_chat", is_default: true, is_active: true, temperature: 0.6, thinking_mode: "disabled" },
+      { model_config_id: 1, provider_code: "kimi_chat", provider_display_name_cn: "Kimi 历史内容资产总结", model_name: "kimi-k2.6", display_name_cn: "Kimi K2.6 历史内容资产总结", model_role: "llm_chat", is_default: false, is_active: false, temperature: 0.6, thinking_mode: "disabled" },
+      { model_config_id: 2, provider_code: "volcengine_ark_chat", provider_display_name_cn: "豆包内容资产总结", model_name: "doubao-seed-2-0-mini-260428", display_name_cn: "豆包 Seed 2.0 Mini 内容资产总结", model_role: "llm_chat", is_default: true, is_active: true, temperature: 0.6, thinking_mode: "disabled" },
       { model_config_id: 3, provider_code: "volcengine_ark_vision", provider_display_name_cn: "火山 Ark 图片多模态解析", model_name: "doubao-seed-2-0-mini-260428", display_name_cn: "豆包图片多模态解析", model_role: "llm_vision", is_default: true, is_active: true, thinking_mode: "disabled" },
       { model_config_id: 4, provider_code: "volcengine_ark_embedding", provider_display_name_cn: "火山 Ark Embedding", model_name: "doubao-embedding-vision-251215", display_name_cn: "豆包内容资产 Embedding", model_role: "embedding", is_default: true, is_active: true, dimensions: 2048 },
     ],
     credentials: [
       { credential_id: 1, provider_code: "endata_xhs_note_detail", provider_display_name_cn: "Endata 小红书笔记详情", credential_name: "Endata 默认 Token", secret_ref: "ENDATA_TOKEN", secret_mask: "ENDATA_TOKEN", status: "active", is_default: true },
-      { credential_id: 2, provider_code: "kimi_chat", provider_display_name_cn: "Kimi 内容资产总结", credential_name: "Kimi 默认 Key", secret_ref: "KIMI_API_KEY", secret_mask: "KIMI_API_KEY", status: "active", is_default: true },
+      { credential_id: 2, provider_code: "kimi_chat", provider_display_name_cn: "Kimi 历史内容资产总结", credential_name: "Kimi 历史 Key", secret_ref: "KIMI_API_KEY", secret_mask: "KIMI_API_KEY", status: "disabled", is_default: false },
+      { credential_id: 4, provider_code: "volcengine_ark_chat", provider_display_name_cn: "豆包内容资产总结", credential_name: "豆包内容资产总结 Key", secret_ref: "GEO_CONTENT_API_KEY", secret_mask: "GEO_CONTENT_API_KEY", status: "active", is_default: true },
       { credential_id: 3, provider_code: "volcengine_ark_vision", provider_display_name_cn: "火山 Ark 图片多模态解析", credential_name: "Ark 默认 Key", secret_ref: "ARK_API_KEY", secret_mask: "ARK_API_KEY", status: "active", is_default: true },
     ],
     rateLimitRules: [],
