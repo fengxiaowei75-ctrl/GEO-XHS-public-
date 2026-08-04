@@ -307,7 +307,6 @@ def request_note_detail(args, note_id):
                     response_bytes=len(response.content or b""),
                     error_code="endata_business_code",
                     error_message=error_message,
-                    raw_usage={},
                     metadata={"source": "note_details", "business_code": code, "business_status": "failed"},
                 )
                 return {

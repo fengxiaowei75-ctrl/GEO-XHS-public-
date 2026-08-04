@@ -425,6 +425,13 @@ def main():
         if conn is not None:
             conn.close()
 
+    image_success = sum(1 for item in image_results if item["status"] == "success")
+    image_failed = sum(1 for item in image_results if item["status"] == "failed")
+    asset_written = len([item for item in asset_ids if item is not None])
+    failed_total = detail_failed + image_failed + asset_failed + vector_failed
+    success_total = detail_success + image_success + asset_written + vector_ok
+    final_status = "success" if failed_total == 0 else "failed"
+
     print(json.dumps({
         "detail_table": args.detail_table,
         "image_table": args.image_table,
@@ -435,20 +442,21 @@ def main():
         "detail_failed": detail_failed,
         "detail_skipped_existing": detail_skipped_existing,
         "images_to_process": image_count,
-        "image_success": sum(1 for item in image_results if item["status"] == "success"),
-        "image_failed": sum(1 for item in image_results if item["status"] == "failed"),
+        "image_success": image_success,
+        "image_failed": image_failed,
         "image_written": image_written,
-        "asset_written": len([item for item in asset_ids if item is not None]),
+        "asset_written": asset_written,
         "asset_failed": asset_failed,
         "vector_success": vector_ok,
         "vector_failed": vector_failed,
     }, ensure_ascii=False, indent=2))
     ops.finish_script_run(
         script_run_id,
-        status="success",
+        status=final_status,
+        exit_code=0 if final_status == "success" else 1,
         processed_count=len(note_ids),
-        success_count=detail_success + sum(1 for item in image_results if item["status"] == "success") + len([item for item in asset_ids if item is not None]) + vector_ok,
-        failed_count=detail_failed + sum(1 for item in image_results if item["status"] == "failed") + asset_failed + vector_failed,
+        success_count=success_total,
+        failed_count=failed_total,
         skipped_count=detail_skipped_existing,
         summary={
             "detail_success": detail_success,
@@ -456,12 +464,14 @@ def main():
             "detail_skipped_existing": detail_skipped_existing,
             "images_to_process": image_count,
             "image_written": image_written,
-            "asset_written": len([item for item in asset_ids if item is not None]),
+            "asset_written": asset_written,
             "asset_failed": asset_failed,
             "vector_success": vector_ok,
             "vector_failed": vector_failed,
         },
     )
+    if final_status != "success":
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
