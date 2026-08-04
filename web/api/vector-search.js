@@ -70,7 +70,7 @@ module.exports = async function handler(req, res) {
 
   try {
     const { query, limit } = await readJsonBody(req);
-    const embeddingUrl = process.env.EMBEDDING_API_URL || "https://ark.cn-beijing.volces.com/api/v3/embeddings";
+    const embeddingUrl = process.env.EMBEDDING_API_URL || "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal";
     const embeddingKey = process.env.EMBEDDING_API_KEY;
     const embeddingModel = process.env.EMBEDDING_MODEL || "doubao-embedding-vision-251215";
 
@@ -98,8 +98,7 @@ module.exports = async function handler(req, res) {
       },
       body: JSON.stringify({
         model: embeddingModel,
-        input: query,
-        encoding_format: "float",
+        input: [{ type: "text", text: query }],
       }),
     });
 
