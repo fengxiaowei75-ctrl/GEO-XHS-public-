@@ -176,6 +176,13 @@ function SegmentedControl({ value, onChange, options }) {
   );
 }
 
+function formatBucket(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return dateFormatter.format(date);
+}
+
 function LineChart({ rows, seriesKey, valueKey = "calls_total", emptyLabel = "暂无曲线数据" }) {
   const prepared = useMemo(() => {
     const buckets = [...new Set(rows.map((item) => item.bucket_start))].sort();
@@ -183,18 +190,25 @@ function LineChart({ rows, seriesKey, valueKey = "calls_total", emptyLabel = "�
     const maxValue = Math.max(1, ...rows.map((item) => Number(item[valueKey] || 0)));
     const bucketIndex = new Map(buckets.map((bucket, index) => [bucket, index]));
     const width = 720;
-    const height = 230;
-    const padX = 28;
-    const padY = 24;
-    const innerW = width - padX * 2;
-    const innerH = height - padY * 2;
+    const height = 260;
+    const padLeft = 58;
+    const padRight = 18;
+    const padTop = 24;
+    const padBottom = 38;
+    const innerW = width - padLeft - padRight;
+    const innerH = height - padTop - padBottom;
+    const yTicks = [0, maxValue / 2, maxValue];
+    const xTicks = buckets.filter((_, index) => {
+      if (buckets.length <= 3) return true;
+      return index === 0 || index === Math.floor((buckets.length - 1) / 2) || index === buckets.length - 1;
+    });
     const paths = series.map((name, seriesIndex) => {
       const points = buckets.map((bucket) => {
         const value = rows
           .filter((item) => (item[seriesKey] || item.provider_code || "unknown") === name && item.bucket_start === bucket)
           .reduce((sum, item) => sum + Number(item[valueKey] || 0), 0);
-        const x = padX + (buckets.length <= 1 ? innerW / 2 : (bucketIndex.get(bucket) / (buckets.length - 1)) * innerW);
-        const y = padY + innerH - (value / maxValue) * innerH;
+        const x = padLeft + (buckets.length <= 1 ? innerW / 2 : (bucketIndex.get(bucket) / (buckets.length - 1)) * innerW);
+        const y = padTop + innerH - (value / maxValue) * innerH;
         return `${x.toFixed(1)},${y.toFixed(1)}`;
       });
       return {
@@ -203,7 +217,7 @@ function LineChart({ rows, seriesKey, valueKey = "calls_total", emptyLabel = "�
         d: points.length ? `M ${points.join(" L ")}` : "",
       };
     });
-    return { buckets, paths, width, height, maxValue };
+    return { buckets, bucketIndex, xTicks, yTicks, paths, width, height, maxValue, padLeft, padRight, padTop, padBottom, innerW, innerH };
   }, [rows, seriesKey, valueKey]);
 
   if (!rows.length || !prepared.paths.length) {
@@ -213,12 +227,29 @@ function LineChart({ rows, seriesKey, valueKey = "calls_total", emptyLabel = "�
   return (
     <div className="chart-wrap">
       <svg viewBox={`0 0 ${prepared.width} ${prepared.height}`} role="img">
-        <line x1="28" x2="692" y1="206" y2="206" className="chart-axis" />
-        <line x1="28" x2="28" y1="24" y2="206" className="chart-axis" />
-        <line x1="28" x2="692" y1="115" y2="115" className="chart-grid" />
+        {prepared.yTicks.map((tick) => {
+          const y = prepared.padTop + prepared.innerH - (tick / prepared.maxValue) * prepared.innerH;
+          return (
+            <g key={`y-${tick}`}>
+              <line x1={prepared.padLeft} x2={prepared.width - prepared.padRight} y1={y} y2={y} className={tick === 0 ? "chart-axis" : "chart-grid"} />
+              <text x={prepared.padLeft - 10} y={y + 4} textAnchor="end" className="chart-label">
+                {formatCompact(tick)}
+              </text>
+            </g>
+          );
+        })}
+        <line x1={prepared.padLeft} x2={prepared.padLeft} y1={prepared.padTop} y2={prepared.height - prepared.padBottom} className="chart-axis" />
         {prepared.paths.map((path) => (
           <path key={path.name} d={path.d} fill="none" stroke={path.color} strokeWidth="3" strokeLinecap="round" />
         ))}
+        {prepared.xTicks.map((bucket) => {
+          const x = prepared.padLeft + (prepared.buckets.length <= 1 ? prepared.innerW / 2 : (prepared.bucketIndex.get(bucket) / (prepared.buckets.length - 1)) * prepared.innerW);
+          return (
+            <text key={bucket} x={x} y={prepared.height - 12} textAnchor="middle" className="chart-label chart-x-label">
+              {formatBucket(bucket)}
+            </text>
+          );
+        })}
       </svg>
       <div className="chart-legend">
         {prepared.paths.map((path) => (
@@ -228,7 +259,7 @@ function LineChart({ rows, seriesKey, valueKey = "calls_total", emptyLabel = "�
           </span>
         ))}
       </div>
-      <div className="chart-scale">峰值 {formatCompact(prepared.maxValue)}</div>
+      <div className="chart-scale">纵轴：{valueKey === "total_tokens" ? "tokens" : "调用次数"} · 峰值 {formatCompact(prepared.maxValue)}</div>
     </div>
   );
 }
@@ -425,9 +456,20 @@ function OpsDashboard({ data }) {
   const [range, setRange] = useState("daily");
   const [provider, setProvider] = useState("all");
   const [model, setModel] = useState("all");
+  const [detailProvider, setDetailProvider] = useState("all");
+  const [detailStatus, setDetailStatus] = useState("failed");
   const ops = data?.ops || {};
   const overview = ops.overview || {};
   const apiRows = ops.apiStatusSummary || [];
+  const detailRows = (ops.recentApiCalls || []).filter((item) => {
+    const providerMatched = detailProvider === "all" || item.provider_code === detailProvider;
+    const statusMatched =
+      detailStatus === "all" ||
+      item.status === detailStatus ||
+      (detailStatus === "failed" && item.status !== "success");
+    return providerMatched && statusMatched;
+  });
+  const failureReasons = (ops.apiFailureReasons || []).filter((item) => detailProvider === "all" || item.provider_code === detailProvider);
   const usageRows = ops.apiUsage?.[range] || [];
   const providerOptions = [
     { value: "all", label: "全部 API" },
@@ -491,7 +533,16 @@ function OpsDashboard({ data }) {
           <SectionHeader icon={Activity} title="API 调用概况" />
           <div className="ops-table-list">
             {apiRows.map((item) => (
-              <div className="ops-row" key={item.provider_code}>
+              <div
+                className={`ops-row ops-row-button ${detailProvider === item.provider_code ? "selected" : ""}`}
+                key={item.provider_code}
+                onClick={() => setDetailProvider(item.provider_code)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") setDetailProvider(item.provider_code);
+                }}
+                role="button"
+                tabIndex={0}
+              >
                 <div>
                   <strong>{item.display_name_cn || item.provider_code}</strong>
                   <span>
@@ -500,7 +551,28 @@ function OpsDashboard({ data }) {
                 </div>
                 <div className="ops-metrics">
                   <b>{formatNumber(item.calls_total)}</b>
-                  <StatusPill tone={Number(item.calls_failed) ? "red" : "green"}>失败 {formatNumber(item.calls_failed)}</StatusPill>
+                  <button
+                    className="metric-button metric-success"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setDetailProvider(item.provider_code);
+                      setDetailStatus("success");
+                    }}
+                    type="button"
+                  >
+                    成功 {formatNumber(item.calls_success)}
+                  </button>
+                  <button
+                    className={`metric-button ${Number(item.calls_failed) ? "metric-failed" : ""}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setDetailProvider(item.provider_code);
+                      setDetailStatus("failed");
+                    }}
+                    type="button"
+                  >
+                    失败 {formatNumber(item.calls_failed)}
+                  </button>
                   <small>{formatCompact(item.total_tokens)} tokens</small>
                 </div>
               </div>
@@ -525,6 +597,90 @@ function OpsDashboard({ data }) {
                 </div>
               </div>
             ))}
+          </div>
+        </section>
+      </section>
+
+      <section className="ops-grid ops-grid-uneven">
+        <section className="panel panel-table">
+          <SectionHeader
+            icon={detailStatus === "success" ? CheckCircle2 : XCircle}
+            title="API 调用下钻"
+            action={
+              <div className="header-actions">
+                <SelectControl value={detailProvider} onChange={setDetailProvider} options={providerOptions} label="API" />
+                <SegmentedControl
+                  value={detailStatus}
+                  onChange={setDetailStatus}
+                  options={[
+                    { value: "failed", label: "失败" },
+                    { value: "success", label: "成功" },
+                    { value: "all", label: "全部" },
+                  ]}
+                />
+              </div>
+            }
+          />
+          <div className="table-wrap">
+            <table className="api-detail-table">
+              <thead>
+                <tr>
+                  <th>调用</th>
+                  <th>状态</th>
+                  <th>笔记</th>
+                  <th>模型</th>
+                  <th>时间</th>
+                  <th>耗时</th>
+                  <th>错误</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detailRows.slice(0, 80).map((item) => (
+                  <tr key={item.api_call_id}>
+                    <td>
+                      <div className="note-title">{item.display_name_cn || item.provider_code}</div>
+                      <div className="note-meta">{item.operation}</div>
+                    </td>
+                    <td>
+                      <StatusPill tone={statusTone(item.status)}>{item.status}</StatusPill>
+                    </td>
+                    <td>
+                      <div className="note-title">{item.note_title || "无标题/未抓到详情"}</div>
+                      <div className="note-meta">{item.note_id || "-"}</div>
+                    </td>
+                    <td>{item.model_name || "-"}</td>
+                    <td>{formatDate(item.started_at)}</td>
+                    <td>{formatDuration(item.latency_ms)}</td>
+                    <td>
+                      <div className="clamped">{item.error_message || item.error_code || "-"}</div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="panel">
+          <SectionHeader icon={AlertTriangle} title="失败原因聚合" />
+          <div className="ops-table-list">
+            {failureReasons.length ? (
+              failureReasons.map((item, index) => (
+                <div className="ops-row" key={`${item.provider_code}-${item.status}-${item.error_code}-${index}`}>
+                  <div>
+                    <strong>{item.error_message || item.error_code}</strong>
+                    <span>
+                      {item.provider_code} · {item.status} · {item.error_code}
+                    </span>
+                  </div>
+                  <div className="ops-metrics">
+                    <b>{formatNumber(item.count)}</b>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="empty-state">当前筛选下没有失败原因</div>
+            )}
           </div>
         </section>
       </section>

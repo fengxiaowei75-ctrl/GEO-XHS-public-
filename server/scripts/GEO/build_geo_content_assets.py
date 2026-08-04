@@ -28,8 +28,8 @@ DEFAULT_IMAGE_TABLE = "public.image_analysis"
 DEFAULT_ASSET_TABLE = "public.geo_note_content_assets"
 DEFAULT_RUN_TABLE = "public.geo_note_content_asset_runs"
 
-DEFAULT_KIMI_BASE_URL = "https://api.kimi.com/coding/v1"
-DEFAULT_KIMI_MODEL = "kimi-k2.6"
+DEFAULT_KIMI_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
+DEFAULT_KIMI_MODEL = "doubao-seed-2-0-mini-260428"
 DEFAULT_KIMI_TEMPERATURE = 0.6
 DEFAULT_KIMI_THINKING = "disabled"
 DEFAULT_PROMPT_VERSION = "geo_note_asset_v1"
@@ -103,13 +103,26 @@ def enrich_args(args):
     args.db_password = args.db_password or os.environ.get("PGPASSWORD") or values.get("PGPASSWORD") or ""
     args.kimi_api_key = (
         args.kimi_api_key
+        or os.environ.get("GEO_CONTENT_API_KEY")
+        or os.environ.get("ARK_CHAT_API_KEY")
         or os.environ.get("KIMI_API_KEY")
         or os.environ.get("MOONSHOT_API_KEY")
+        or values.get("GEO_CONTENT_API_KEY")
+        or values.get("ARK_CHAT_API_KEY")
         or values.get("KIMI_API_KEY")
         or values.get("MOONSHOT_API_KEY")
         or ""
     )
-    args.kimi_model = args.kimi_model or os.environ.get("KIMI_MODEL") or values.get("KIMI_MODEL") or DEFAULT_KIMI_MODEL
+    args.kimi_model = (
+        args.kimi_model
+        or os.environ.get("GEO_CONTENT_MODEL")
+        or os.environ.get("ARK_CHAT_MODEL")
+        or os.environ.get("KIMI_MODEL")
+        or values.get("GEO_CONTENT_MODEL")
+        or values.get("ARK_CHAT_MODEL")
+        or values.get("KIMI_MODEL")
+        or DEFAULT_KIMI_MODEL
+    )
     args.kimi_thinking = (
         args.kimi_thinking
         or os.environ.get("KIMI_THINKING")
@@ -121,8 +134,12 @@ def enrich_args(args):
         args.kimi_temperature = float(temperature) if temperature else DEFAULT_KIMI_TEMPERATURE
     args.kimi_base_url = (
         args.kimi_base_url
+        or os.environ.get("GEO_CONTENT_BASE_URL")
+        or os.environ.get("ARK_CHAT_BASE_URL")
         or os.environ.get("KIMI_BASE_URL")
         or os.environ.get("MOONSHOT_BASE_URL")
+        or values.get("GEO_CONTENT_BASE_URL")
+        or values.get("ARK_CHAT_BASE_URL")
         or values.get("KIMI_BASE_URL")
         or values.get("MOONSHOT_BASE_URL")
         or DEFAULT_KIMI_BASE_URL
@@ -130,10 +147,22 @@ def enrich_args(args):
     if not args.dry_run and not args.db_password:
         raise RuntimeError("Missing database password. Set PGPASSWORD or --db-password.")
     if not args.dry_run and not args.skip_llm and not args.kimi_api_key:
-        raise RuntimeError("Missing Kimi API key. Set KIMI_API_KEY/MOONSHOT_API_KEY or --kimi-api-key.")
+        raise RuntimeError("Missing content model API key. Set GEO_CONTENT_API_KEY/ARK_CHAT_API_KEY/KIMI_API_KEY or --kimi-api-key.")
     if args.freshness_half_life_days <= 0:
         raise RuntimeError("--freshness-half-life-days must be positive.")
     return args
+
+
+def content_provider_code(args):
+    base_url = (getattr(args, "kimi_base_url", "") or "").lower()
+    model_name = (getattr(args, "kimi_model", "") or "").lower()
+    if "volces.com" in base_url or "doubao" in model_name:
+        return "volcengine_ark_chat"
+    return "kimi_chat"
+
+
+def content_model_provider(args):
+    return "volcengine_ark" if content_provider_code(args) == "volcengine_ark_chat" else "kimi"
 
 
 def split_table_name(table_name):
@@ -726,7 +755,7 @@ def call_kimi(args, system_prompt, user_prompt):
             response = ops.call_api(
                 "POST",
                 f"{args.kimi_base_url}/chat/completions",
-                provider_code="kimi_chat",
+                provider_code=content_provider_code(args),
                 operation="content_asset_summary",
                 model_name=args.kimi_model,
                 note_id=getattr(args, "_current_note_id", None),
@@ -789,7 +818,7 @@ INSERT INTO {run_table}
   (note_id, prompt_version, model_provider, model_name, input_payload, output_text,
    parsed_output, status, error, token_usage, latency_ms)
 VALUES
-  (%s, %s, 'kimi', %s, %s, %s, %s, %s, %s, %s, %s)
+  (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
     ).format(run_table=sql.Identifier(run_schema, run_name))
     with conn.cursor() as cur:
@@ -798,6 +827,7 @@ VALUES
             (
                 note_id,
                 args.prompt_version,
+                content_model_provider(args),
                 args.kimi_model,
                 Json(make_jsonable(input_payload)),
                 output_text,
@@ -820,6 +850,7 @@ def upsert_asset(conn, args, note, image_items, parsed, raw_payload):
         "note_id": note["note_id"],
         "prompt_version": args.prompt_version,
         "model_name": args.kimi_model,
+        "model_provider": content_model_provider(args),
         "base_url": args.kimi_base_url,
         "analysis_status": "success",
         "analysis_error": None,
@@ -919,6 +950,7 @@ def build_input_payload(note, image_items, args, system_prompt, user_prompt):
         "note_id": note["note_id"],
         "prompt_version": args.prompt_version,
         "model_name": args.kimi_model,
+        "model_provider": content_model_provider(args),
         "base_url": args.kimi_base_url,
         "rank_mode": args.rank_mode,
         "freshness_half_life_days": args.freshness_half_life_days,

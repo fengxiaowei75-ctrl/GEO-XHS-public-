@@ -151,6 +151,8 @@ module.exports = async function handler(req, res) {
       failedQueue,
       opsOverviewRows,
       apiStatusSummary,
+      recentApiCalls,
+      apiFailureReasons,
       apiUsageHourly,
       apiUsageDaily,
       apiUsageWeekly,
@@ -174,6 +176,50 @@ module.exports = async function handler(req, res) {
           (SELECT count(*)::int FROM public.geo_note_content_asset_runs WHERE status='failed') AS "kimiFailedRuns",
           (SELECT min(publish_time) FROM public.geo_note_content_assets WHERE analysis_status='success') AS "minPublishTime",
           (SELECT max(publish_time) FROM public.geo_note_content_assets WHERE analysis_status='success') AS "maxPublishTime"
+        `,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          l.api_call_id,
+          l.provider_code,
+          r.display_name_cn,
+          r.provider_type,
+          l.operation,
+          l.status,
+          l.http_status,
+          l.note_id,
+          COALESCE(NULLIF(n.title, ''), NULLIF(a.title, ''), NULLIF(n.source_title, ''), '') AS note_title,
+          COALESCE(m.model_name, '') AS model_name,
+          l.started_at,
+          l.latency_ms,
+          l.total_tokens,
+          l.error_code,
+          left(l.error_message, 240) AS error_message
+        FROM public.geo_ops_api_call_logs l
+        JOIN public.geo_ops_api_registry r ON r.provider_code = l.provider_code
+        LEFT JOIN public.geo_ops_model_configs m ON m.model_config_id = l.model_config_id
+        LEFT JOIN public.note_details n ON n.note_id = l.note_id
+        LEFT JOIN public.geo_note_content_assets a ON a.note_id = l.note_id
+        ORDER BY l.started_at DESC, l.api_call_id DESC
+        LIMIT 500
+        `,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          provider_code,
+          status,
+          COALESCE(error_code, 'business_or_unknown') AS error_code,
+          COALESCE(left(error_message, 120), 'NULL_TEXT') AS error_message,
+          count(*)::int AS count
+        FROM public.geo_ops_api_call_logs
+        WHERE status <> 'success'
+        GROUP BY provider_code, status, COALESCE(error_code, 'business_or_unknown'), COALESCE(left(error_message, 120), 'NULL_TEXT')
+        ORDER BY count DESC, provider_code
+        LIMIT 40
         `,
       ),
       query(
@@ -587,6 +633,8 @@ module.exports = async function handler(req, res) {
       ops: {
         overview: opsOverviewRows[0],
         apiStatusSummary,
+        recentApiCalls,
+        apiFailureReasons,
         apiUsage: {
           hourly: apiUsageHourly,
           daily: apiUsageDaily,
