@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+import select
+import sys
+import time
+from pathlib import Path
+
+import psycopg2
+from psycopg2 import sql
+import requests
+
+
+DEFAULT_ENV_FILE = os.environ.get("XHS_SYNC_ENV_FILE") or (
+    "/opt/xhs-sync/sync.env"
+    if os.path.exists("/opt/xhs-sync")
+    else "/tmp/geo-xhs/sync.env"
+)
+DEFAULT_ASSET_TABLE = "public.geo_note_content_assets"
+DEFAULT_VECTOR_TABLE = "public.geo_note_content_asset_vectors"
+DEFAULT_EMBEDDING_MODEL = "doubao-embedding-vision-251215"
+ARK_EMBEDDING_URL = "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal"
+DEFAULT_LISTEN_CHANNEL = "geo_note_content_asset_changed"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Embed GEO note content assets into pgvector, with optional LISTEN/NOTIFY watch mode."
+    )
+    parser.add_argument("--asset-table", default=DEFAULT_ASSET_TABLE)
+    parser.add_argument("--vector-table", default=DEFAULT_VECTOR_TABLE)
+    parser.add_argument("--asset-id", action="append", type=int, default=[], help="Only embed selected asset_id.")
+    parser.add_argument("--note-id", action="append", default=[], help="Only embed selected note_id.")
+    parser.add_argument("--limit", type=int, default=50)
+    parser.add_argument("--force", action="store_true", help="Re-embed even if vector exists.")
+    parser.add_argument("--only-missing", action="store_true", help="Only embed assets without vector. Default unless --force.")
+    parser.add_argument("--watch", action="store_true", help="Continuously listen for asset changes and embed.")
+    parser.add_argument("--poll-interval", type=int, default=60, help="Seconds between fallback polling in watch mode.")
+    parser.add_argument("--listen-channel", default=DEFAULT_LISTEN_CHANNEL)
+    parser.add_argument("--embedding-model", default="")
+    parser.add_argument("--ark-api-key", default="")
+    parser.add_argument("--timeout", type=int, default=60)
+    parser.add_argument("--retries", type=int, default=3)
+    parser.add_argument("--retry-sleep", type=float, default=2.0)
+    parser.add_argument("--max-text-chars", type=int, default=4000)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--db-host", default="localhost")
+    parser.add_argument("--db-port", default="5432")
+    parser.add_argument("--db-name", default="xhs_geo")
+    parser.add_argument("--db-user", default="app_user")
+    parser.add_argument("--db-password", default="")
+    return parser.parse_args()
+
+
+def load_env_file():
+    values = {}
+    env_path = Path(DEFAULT_ENV_FILE)
+    if not env_path.exists():
+        return values
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key] = value.strip().strip("'").strip('"')
+    return values
+
+
+def fallback_ark_api_key():
+    try:
+        script_dir = Path(__file__).resolve().parent
+        if str(script_dir) not in sys.path:
+            sys.path.insert(0, str(script_dir))
+        import analyze_xhs_geo_note_images as image_pipeline
+
+        return getattr(image_pipeline, "ARK_API_KEY", "")
+    except Exception:
+        return ""
+
+
+def enrich_args(args):
+    values = load_env_file()
+    args.db_password = args.db_password or os.environ.get("PGPASSWORD") or values.get("PGPASSWORD") or ""
+    args.ark_api_key = (
+        args.ark_api_key
+        or os.environ.get("ARK_API_KEY")
+        or os.environ.get("VOLC_API_KEY")
+        or values.get("ARK_API_KEY")
+        or values.get("VOLC_API_KEY")
+        or fallback_ark_api_key()
+    )
+    args.embedding_model = (
+        args.embedding_model
+        or os.environ.get("ARK_EMBEDDING_MODEL")
+        or values.get("ARK_EMBEDDING_MODEL")
+        or DEFAULT_EMBEDDING_MODEL
+    )
+    if not args.db_password:
+        raise RuntimeError("Missing database password. Set PGPASSWORD or --db-password.")
+    if not args.dry_run and not args.ark_api_key:
+        raise RuntimeError("Missing Ark API key. Set ARK_API_KEY/VOLC_API_KEY or --ark-api-key.")
+    if not args.force:
+        args.only_missing = True
+    return args
+
+
+def split_table_name(table_name):
+    parts = [part.strip('"') for part in table_name.split(".")]
+    if len(parts) == 1:
+        return "public", parts[0]
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    raise ValueError("Table name must be table or schema.table")
+
+
+def db_connect(args):
+    return psycopg2.connect(
+        host=args.db_host,
+        port=args.db_port,
+        dbname=args.db_name,
+        user=args.db_user,
+        password=args.db_password,
+    )
+
+
+def ensure_vector_table(conn, asset_table, vector_table):
+    asset_schema, asset_name = split_table_name(asset_table)
+    vector_schema, vector_name = split_table_name(vector_table)
+    ddl = sql.SQL(
+        """
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE SCHEMA IF NOT EXISTS {vector_schema};
+
+CREATE TABLE IF NOT EXISTS {vector_table} (
+  asset_id bigint PRIMARY KEY REFERENCES {asset_table}(asset_id) ON DELETE CASCADE,
+  note_id text NOT NULL,
+  embedding_model text NOT NULL,
+  combined_text text NOT NULL,
+  content_vector halfvec(2048),
+  created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS {idx_note}
+  ON {vector_table} (note_id);
+
+CREATE INDEX IF NOT EXISTS {idx_hnsw}
+  ON {vector_table}
+  USING hnsw (content_vector halfvec_cosine_ops);
+"""
+    ).format(
+        vector_schema=sql.Identifier(vector_schema),
+        vector_table=sql.Identifier(vector_schema, vector_name),
+        asset_table=sql.Identifier(asset_schema, asset_name),
+        idx_note=sql.Identifier(f"idx_{vector_name}_note_id"),
+        idx_hnsw=sql.Identifier(f"idx_{vector_name}_hnsw"),
+    )
+    with conn.cursor() as cur:
+        cur.execute(ddl)
+    conn.commit()
+
+
+def fetch_assets(conn, args, specific_asset_ids=None):
+    asset_schema, asset_name = split_table_name(args.asset_table)
+    vector_schema, vector_name = split_table_name(args.vector_table)
+    where_parts = [
+        sql.SQL("a.analysis_status = 'success'"),
+        sql.SQL("COALESCE(a.asset_text, '') <> ''"),
+    ]
+    params = {}
+    if specific_asset_ids:
+        where_parts.append(sql.SQL("a.asset_id = ANY(%(specific_asset_ids)s)"))
+        params["specific_asset_ids"] = list(specific_asset_ids)
+    elif args.asset_id:
+        where_parts.append(sql.SQL("a.asset_id = ANY(%(asset_ids)s)"))
+        params["asset_ids"] = args.asset_id
+    if args.note_id:
+        where_parts.append(sql.SQL("a.note_id = ANY(%(note_ids)s)"))
+        params["note_ids"] = args.note_id
+    if args.only_missing:
+        where_parts.append(sql.SQL("v.asset_id IS NULL"))
+    limit_sql = sql.SQL("")
+    if args.limit and not specific_asset_ids:
+        limit_sql = sql.SQL("LIMIT %(limit)s")
+        params["limit"] = args.limit
+
+    query = sql.SQL(
+        """
+SELECT a.asset_id, a.note_id, a.asset_text, a.updated_at
+FROM {asset_table} a
+LEFT JOIN {vector_table} v ON v.asset_id = a.asset_id
+WHERE {where_clause}
+ORDER BY a.fresh_hot_score DESC NULLS LAST, a.updated_at DESC
+{limit_sql}
+"""
+    ).format(
+        asset_table=sql.Identifier(asset_schema, asset_name),
+        vector_table=sql.Identifier(vector_schema, vector_name),
+        where_clause=sql.SQL(" AND ").join(where_parts),
+        limit_sql=limit_sql,
+    )
+    with conn.cursor() as cur:
+        cur.execute(query, params)
+        return [
+            {"asset_id": row[0], "note_id": row[1], "asset_text": row[2], "updated_at": row[3]}
+            for row in cur.fetchall()
+        ]
+
+
+def get_embedding(args, text):
+    text = (text or "").strip()
+    if not text:
+        return None
+    text = text[: args.max_text_chars]
+    body = {
+        "model": args.embedding_model,
+        "input": [{"type": "text", "text": text}],
+    }
+    headers = {
+        "Authorization": f"Bearer {args.ark_api_key}",
+        "Content-Type": "application/json",
+    }
+    last_error = None
+    for attempt in range(args.retries + 1):
+        try:
+            response = requests.post(ARK_EMBEDDING_URL, headers=headers, json=body, timeout=args.timeout)
+            if response.status_code >= 400:
+                raise RuntimeError(f"HTTP {response.status_code}: {response.text[:1000]}")
+            payload = response.json()
+            data = payload.get("data")
+            if isinstance(data, list) and data:
+                embedding = data[0].get("embedding")
+            elif isinstance(data, dict):
+                embedding = data.get("embedding")
+            else:
+                embedding = None
+            if not embedding:
+                raise RuntimeError(f"embedding missing in response: {payload}")
+            return embedding
+        except Exception as exc:
+            last_error = exc
+            if attempt >= args.retries:
+                break
+            time.sleep(args.retry_sleep * (attempt + 1))
+    raise RuntimeError(f"embedding request failed after retries: {last_error}") from last_error
+
+
+def vector_literal(vector):
+    return "[" + ",".join(str(float(item)) for item in vector) + "]"
+
+
+def upsert_vector(conn, args, asset, embedding):
+    vector_schema, vector_name = split_table_name(args.vector_table)
+    combined_text = (asset.get("asset_text") or "").strip()[: args.max_text_chars]
+    query = sql.SQL(
+        """
+INSERT INTO {vector_table} (asset_id, note_id, embedding_model, combined_text, content_vector)
+VALUES (%s, %s, %s, %s, %s)
+ON CONFLICT (asset_id) DO UPDATE SET
+  note_id = EXCLUDED.note_id,
+  embedding_model = EXCLUDED.embedding_model,
+  combined_text = EXCLUDED.combined_text,
+  content_vector = EXCLUDED.content_vector,
+  updated_at = CURRENT_TIMESTAMP
+"""
+    ).format(vector_table=sql.Identifier(vector_schema, vector_name))
+    with conn.cursor() as cur:
+        cur.execute(query, (asset["asset_id"], asset["note_id"], args.embedding_model, combined_text, vector_literal(embedding)))
+    conn.commit()
+
+
+def embed_assets(conn, args, specific_asset_ids=None):
+    assets = fetch_assets(conn, args, specific_asset_ids=specific_asset_ids)
+    if not assets:
+        return 0, 0
+    print(f"assets_to_embed={len(assets)}")
+    ok = fail = 0
+    for index, asset in enumerate(assets, start=1):
+        try:
+            if args.dry_run:
+                print(json.dumps({
+                    "asset_id": asset["asset_id"],
+                    "note_id": asset["note_id"],
+                    "text_preview": (asset["asset_text"] or "")[:300],
+                }, ensure_ascii=False, indent=2))
+                ok += 1
+                continue
+            embedding = get_embedding(args, asset["asset_text"])
+            if len(embedding) != 2048:
+                raise RuntimeError(f"embedding dimension mismatch: expected 2048, got {len(embedding)}")
+            upsert_vector(conn, args, asset, embedding)
+            ok += 1
+            print(f"[{index}/{len(assets)}] asset_id={asset['asset_id']} ok")
+        except Exception as exc:
+            fail += 1
+            print(f"[{index}/{len(assets)}] asset_id={asset['asset_id']} failed={exc}", flush=True)
+    return ok, fail
+
+
+def watch_loop(args):
+    conn = db_connect(args)
+    conn.autocommit = True
+    try:
+        ensure_vector_table(conn, args.asset_table, args.vector_table)
+        with conn.cursor() as cur:
+            cur.execute(sql.SQL("LISTEN {};").format(sql.Identifier(args.listen_channel)))
+        print(f"listening channel={args.listen_channel} poll_interval={args.poll_interval}s")
+        # Initial catch-up.
+        ok, fail = embed_assets(conn, args)
+        print(f"initial_catchup ok={ok} failed={fail}", flush=True)
+        while True:
+            ready = select.select([conn], [], [], args.poll_interval)
+            specific_ids = set()
+            if ready[0]:
+                conn.poll()
+                while conn.notifies:
+                    notify = conn.notifies.pop(0)
+                    try:
+                        specific_ids.add(int(notify.payload))
+                    except ValueError:
+                        pass
+            if specific_ids:
+                previous_only_missing = args.only_missing
+                args.only_missing = False
+                ok, fail = embed_assets(conn, args, specific_asset_ids=specific_ids)
+                args.only_missing = previous_only_missing
+                print(f"notify_embed ok={ok} failed={fail}", flush=True)
+            else:
+                ok, fail = embed_assets(conn, args)
+                if ok or fail:
+                    print(f"poll_embed ok={ok} failed={fail}", flush=True)
+    finally:
+        conn.close()
+
+
+def main():
+    args = enrich_args(parse_args())
+    if args.watch:
+        watch_loop(args)
+        return
+
+    conn = db_connect(args)
+    try:
+        ensure_vector_table(conn, args.asset_table, args.vector_table)
+        ok, fail = embed_assets(conn, args)
+    finally:
+        conn.close()
+    print(json.dumps({
+        "vector_table": args.vector_table,
+        "embedding_model": args.embedding_model,
+        "success": ok,
+        "failed": fail,
+    }, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()

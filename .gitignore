@@ -1,8 +1,15 @@
 node_modules/
 dist/
 .env
+*.env
 .env.local
 .env.*.local
 !.env.example
+!*.enc.env
+server/secrets/*.plain
+server/secrets/*.decrypted
 .vercel/
 *.log
+logs/
+__pycache__/
+.DS_Store

@@ -1,0 +1,18 @@
+[Unit]
+Description=XHS GEO note ingest queue worker
+After=network-online.target xhs-geo-asset-vector.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/xhs-sync/scripts/GEO
+EnvironmentFile=/opt/xhs-sync/sync.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/xhs-sync/scripts/GEO/watch_geo_note_ingest_queue.py --watch --enqueue-existing --poll-interval 30 --batch-size 1 --job-timeout 1200 --child-timeout 180 --child-retries 1 --detail-concurrency 4 --image-concurrency 4
+Restart=always
+RestartSec=10
+StandardOutput=append:/opt/xhs-sync/logs/geo-note-ingest-queue.log
+StandardError=append:/opt/xhs-sync/logs/geo-note-ingest-queue.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,63 @@
+# Server
+
+云服务器后台脚本目录。线上当前运行路径是：
+
+```bash
+/opt/xhs-sync/scripts/GEO
+```
+
+## Active Services
+
+Service 文件备份在：
+
+```bash
+server/systemd/
+```
+
+```bash
+systemctl status xhs-geo-note-ingest-queue.service --no-pager
+systemctl status xhs-geo-asset-vector.service --no-pager
+```
+
+- `xhs-geo-note-ingest-queue.service`: 监听 `geo_note_ingest_queue`，自动抓取笔记详情、处理图片、调用 Kimi 总结并刷新资产。
+- `xhs-geo-asset-vector.service`: 监听内容资产更新，持续刷新 pgvector 向量。
+
+## Secrets
+
+线上明文环境文件仍在服务器：
+
+```bash
+/opt/xhs-sync/sync.env
+```
+
+仓库内只保存加密备份：
+
+```bash
+server/secrets/sync.enc.env
+```
+
+本机解密：
+
+```bash
+sops -d server/secrets/sync.enc.env
+```
+
+恢复到服务器时，不要把明文提交进 GitHub：
+
+```bash
+sops -d server/secrets/sync.enc.env > /private/tmp/sync.env
+scp /private/tmp/sync.env root@47.94.156.199:/opt/xhs-sync/sync.env
+```
+
+## Update Rule
+
+推荐以后把 GitHub 作为唯一代码源：
+
+```text
+修改 server/ 代码
+-> commit / push 到 GitHub
+-> 云服务器拉取新代码
+-> 重启对应 systemd 服务
+```
+
+不要长期直接在 `/opt/xhs-sync/scripts/GEO` 手改线上脚本，否则 GitHub 版本和服务器实际运行版本会分叉。

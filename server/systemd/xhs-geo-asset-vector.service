@@ -1,0 +1,17 @@
+[Unit]
+Description=XHS GEO content asset pgvector watcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/xhs-sync/scripts/GEO
+EnvironmentFile=/opt/xhs-sync/sync.env
+ExecStart=/usr/bin/python3 /opt/xhs-sync/scripts/GEO/embed_geo_content_assets.py --watch --poll-interval 60 --limit 50
+Restart=always
+RestartSec=10
+StandardOutput=append:/opt/xhs-sync/logs/geo-asset-vector.log
+StandardError=append:/opt/xhs-sync/logs/geo-asset-vector.log
+
+[Install]
+WantedBy=multi-user.target
