@@ -4,6 +4,54 @@ let pool;
 
 const requiredEnv = ["PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD"];
 
+const endataEndpointMeta = {
+  "/v2/xhs/getstandardnoteinfo": {
+    display_name_cn: "小红书笔记详情",
+    description_cn: "按 note_id 拉取标题、正文、发布时间、互动量、图片和视频封面，是爆文判断与资产拆解的基础数据。",
+    scripts: [
+      { script_key: "watch_geo_note_ingest_queue", display_name_cn: "GEO 笔记队列 worker", scope: "GEO 新笔记入库" },
+      { script_key: "sync_xhs_note_by_id", display_name_cn: "GEO 单条笔记编排入口", scope: "GEO 单条补全" },
+      { script_key: "xhs_author_pipeline", display_name_cn: "麦富迪作者管线", scope: "麦富迪作者笔记详情" },
+    ],
+  },
+  "/v2/xhs/getstandardusernotelist": {
+    display_name_cn: "账号笔记列表",
+    description_cn: "按小红书作者/账号分页拉取笔记列表，用于发现账号近期内容和后续详情抓取。",
+    scripts: [
+      { script_key: "xhs_author_pipeline", display_name_cn: "麦富迪作者管线", scope: "按作者拉取笔记列表" },
+    ],
+  },
+  "/v2/xhs/getxhsnotelist_gb": {
+    display_name_cn: "品牌/关键词笔记列表",
+    description_cn: "按品牌词或关键词拉取小红书笔记列表，用于麦富迪品牌池和爆文候选发现。",
+    scripts: [
+      { script_key: "sync_xhs_maifudi_notes", display_name_cn: "麦富迪品牌笔记同步", scope: "按品牌/关键词拉取候选笔记" },
+    ],
+  },
+};
+
+const endataEndpointCatalog = Object.entries(endataEndpointMeta).map(([url, meta]) => ({
+  url,
+  display_name_cn: meta.display_name_cn,
+  description_cn: meta.description_cn,
+  scripts: meta.scripts,
+}));
+
+function enrichEndataEndpoint(row) {
+  const url = String(row.url || "").toLowerCase();
+  const meta = endataEndpointMeta[url] || {
+    display_name_cn: row.url || "未知艺恩接口",
+    description_cn: "未登记中文解释的艺恩接口，需要根据实际脚本调用补充说明。",
+    scripts: [{ script_key: "unknown", display_name_cn: "未登记脚本", scope: "等待脚本接入调用日志" }],
+  };
+  return {
+    ...row,
+    display_name_cn: meta.display_name_cn,
+    description_cn: meta.description_cn,
+    scripts: meta.scripts,
+  };
+}
+
 function hasDatabaseEnv() {
   return requiredEnv.every((key) => Boolean(process.env[key]));
 }
@@ -132,6 +180,81 @@ function sampleData() {
       scriptRunSummary: [],
       recentScriptRuns: [],
       scriptEvents: [],
+      endataBalance: {
+        latestSnapshots: [
+          {
+            range_key: "today",
+            begin_code: "20260804",
+            end_code: "20260804",
+            sampled_at: "2026-08-04T06:36:00.000Z",
+            ok: true,
+            residue_fee: 9992.56,
+            previous_residue_fee: 9992.57,
+            balance_delta: -0.01,
+            success_count: 7681,
+            previous_success_count: 7680,
+            success_count_delta: 1,
+            snapshot_count: 120,
+            latency_ms: 420,
+          },
+        ],
+        endpoints: [
+          {
+            url: "/v2/xhs/getstandardnoteinfo",
+            display_name_cn: "小红书笔记详情",
+            description_cn: "按 note_id 拉取标题、正文、发布时间、互动量、图片和视频封面，是爆文判断与资产拆解的基础数据。",
+            count: 6925,
+            previous_count: 6924,
+            count_delta: 1,
+            share_pct: 90.16,
+            sampled_at: "2026-08-04T06:36:00.000Z",
+            scripts: endataEndpointMeta["/v2/xhs/getstandardnoteinfo"].scripts,
+          },
+          {
+            url: "/v2/xhs/getstandardusernotelist",
+            display_name_cn: "账号笔记列表",
+            description_cn: "按小红书作者/账号分页拉取笔记列表，用于发现账号近期内容和后续详情抓取。",
+            count: 477,
+            previous_count: 477,
+            count_delta: 0,
+            share_pct: 6.21,
+            sampled_at: "2026-08-04T06:36:00.000Z",
+            scripts: endataEndpointMeta["/v2/xhs/getstandardusernotelist"].scripts,
+          },
+          {
+            url: "/v2/xhs/getxhsnotelist_gb",
+            display_name_cn: "品牌/关键词笔记列表",
+            description_cn: "按品牌词或关键词拉取小红书笔记列表，用于麦富迪品牌池和爆文候选发现。",
+            count: 279,
+            previous_count: 279,
+            count_delta: 0,
+            share_pct: 3.63,
+            sampled_at: "2026-08-04T06:36:00.000Z",
+            scripts: endataEndpointMeta["/v2/xhs/getxhsnotelist_gb"].scripts,
+          },
+        ],
+        endpointHistory: [
+          { bucket_start: "2026-08-04T06:34:00.000Z", url: "/v2/xhs/getstandardnoteinfo", display_name_cn: "小红书笔记详情", count: 6923, share_pct: 90.16 },
+          { bucket_start: "2026-08-04T06:35:00.000Z", url: "/v2/xhs/getstandardnoteinfo", display_name_cn: "小红书笔记详情", count: 6924, share_pct: 90.16 },
+          { bucket_start: "2026-08-04T06:36:00.000Z", url: "/v2/xhs/getstandardnoteinfo", display_name_cn: "小红书笔记详情", count: 6925, share_pct: 90.16 },
+          { bucket_start: "2026-08-04T06:34:00.000Z", url: "/v2/xhs/getstandardusernotelist", display_name_cn: "账号笔记列表", count: 477, share_pct: 6.21 },
+          { bucket_start: "2026-08-04T06:35:00.000Z", url: "/v2/xhs/getstandardusernotelist", display_name_cn: "账号笔记列表", count: 477, share_pct: 6.21 },
+          { bucket_start: "2026-08-04T06:36:00.000Z", url: "/v2/xhs/getstandardusernotelist", display_name_cn: "账号笔记列表", count: 477, share_pct: 6.21 },
+        ],
+        scriptUsageHourly: [
+          {
+            bucket_start: "2026-08-04T06:00:00.000Z",
+            script_key: "watch_geo_note_ingest_queue",
+            display_name_cn: "GEO 笔记队列 worker",
+            url: "/v2/xhs/getstandardnoteinfo",
+            endpoint_display_name_cn: "小红书笔记详情",
+            operation: "note_detail_fetch",
+            calls_total: 8,
+            calls_success: 8,
+            calls_failed: 0,
+          },
+        ],
+      },
       modelConfigs: [],
       credentials: [],
       rateLimitRules: [],
@@ -171,6 +294,10 @@ module.exports = async function handler(req, res) {
       scriptRunSummary,
       recentScriptRuns,
       scriptEvents,
+      endataLatestSnapshots,
+      endataEndpointDetails,
+      endataEndpointHistory,
+      endataScriptUsageHourly,
       modelConfigs,
       credentials,
       rateLimitRules,
@@ -587,6 +714,150 @@ module.exports = async function handler(req, res) {
       query(
         client,
         `
+        WITH ranked AS (
+          SELECT
+            s.*,
+            lead(s.residue_fee) OVER (PARTITION BY s.range_key, s.begin_code, s.end_code, s.url_filter ORDER BY s.sampled_at DESC) AS previous_residue_fee,
+            lead(s.success_count) OVER (PARTITION BY s.range_key, s.begin_code, s.end_code, s.url_filter ORDER BY s.sampled_at DESC) AS previous_success_count,
+            lead(s.sampled_at) OVER (PARTITION BY s.range_key, s.begin_code, s.end_code, s.url_filter ORDER BY s.sampled_at DESC) AS previous_sampled_at,
+            count(*) OVER (PARTITION BY s.range_key, s.begin_code, s.end_code, s.url_filter)::int AS snapshot_count,
+            row_number() OVER (PARTITION BY s.range_key, s.begin_code, s.end_code, s.url_filter ORDER BY s.sampled_at DESC) AS rn
+          FROM public.endata_visit_stat_snapshots s
+          WHERE s.url_filter = ''
+            AND s.range_key IN ('today', 'yesterday', 'month')
+            AND s.sampled_at >= now() - interval '90 days'
+        )
+        SELECT
+          snapshot_id,
+          range_key,
+          begin_code,
+          end_code,
+          sampled_at,
+          ok,
+          http_status,
+          code,
+          msg,
+          residue_fee::float AS residue_fee,
+          previous_residue_fee::float AS previous_residue_fee,
+          (residue_fee - previous_residue_fee)::float AS balance_delta,
+          success_count,
+          previous_success_count,
+          (success_count - previous_success_count)::int AS success_count_delta,
+          previous_sampled_at,
+          snapshot_count,
+          latency_ms,
+          error
+        FROM ranked
+        WHERE rn = 1
+        ORDER BY
+          CASE range_key WHEN 'today' THEN 1 WHEN 'yesterday' THEN 2 WHEN 'month' THEN 3 ELSE 9 END
+        `,
+      ),
+      query(
+        client,
+        `
+        WITH ranked AS (
+          SELECT
+            s.snapshot_id,
+            s.range_key,
+            s.begin_code,
+            s.end_code,
+            s.sampled_at,
+            s.success_count,
+            row_number() OVER (PARTITION BY s.range_key, s.begin_code, s.end_code ORDER BY s.sampled_at DESC) AS rn,
+            lead(s.snapshot_id) OVER (PARTITION BY s.range_key, s.begin_code, s.end_code ORDER BY s.sampled_at DESC) AS previous_snapshot_id
+          FROM public.endata_visit_stat_snapshots s
+          WHERE s.range_key = 'today'
+            AND s.url_filter = ''
+            AND s.ok = true
+            AND s.sampled_at >= now() - interval '14 days'
+        ),
+        latest AS (
+          SELECT * FROM ranked WHERE rn = 1
+        )
+        SELECT
+          d.url,
+          d.count,
+          d.share_pct::float AS share_pct,
+          COALESCE(pd.count, 0) AS previous_count,
+          (d.count - COALESCE(pd.count, 0))::int AS count_delta,
+          latest.sampled_at,
+          latest.begin_code,
+          latest.end_code,
+          latest.success_count
+        FROM latest
+        JOIN public.endata_visit_stat_details d ON d.snapshot_id = latest.snapshot_id
+        LEFT JOIN public.endata_visit_stat_details pd
+          ON pd.snapshot_id = latest.previous_snapshot_id AND pd.url = d.url
+        ORDER BY d.count DESC, d.url
+        `,
+      ),
+      query(
+        client,
+        `
+        WITH latest_period AS (
+          SELECT begin_code, end_code
+          FROM public.endata_visit_stat_snapshots
+          WHERE range_key = 'today' AND url_filter = '' AND ok = true
+          ORDER BY sampled_at DESC
+          LIMIT 1
+        ),
+        recent_snapshots AS (
+          SELECT s.snapshot_id, s.sampled_at
+          FROM public.endata_visit_stat_snapshots s
+          JOIN latest_period p ON p.begin_code = s.begin_code AND p.end_code = s.end_code
+          WHERE s.range_key = 'today' AND s.url_filter = '' AND s.ok = true
+          ORDER BY s.sampled_at DESC
+          LIMIT 72
+        )
+        SELECT
+          rs.sampled_at AS bucket_start,
+          d.url,
+          d.count,
+          d.share_pct::float AS share_pct
+        FROM recent_snapshots rs
+        JOIN public.endata_visit_stat_details d ON d.snapshot_id = rs.snapshot_id
+        ORDER BY rs.sampled_at, d.url
+        `,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          date_trunc('hour', l.started_at) AS bucket_start,
+          COALESCE(l.script_key, 'unknown') AS script_key,
+          COALESCE(s.display_name_cn, l.script_key, '未记录脚本') AS display_name_cn,
+          CASE
+            WHEN lower(COALESCE(l.request_path, '')) IN (
+              '/v2/xhs/getstandardnoteinfo',
+              '/v2/xhs/getstandardusernotelist',
+              '/v2/xhs/getxhsnotelist_gb'
+            ) THEN lower(l.request_path)
+            WHEN l.provider_code = 'endata_xhs_note_detail' THEN '/v2/xhs/getstandardnoteinfo'
+            ELSE lower(COALESCE(l.request_path, l.provider_code))
+          END AS url,
+          l.operation,
+          count(*)::int AS calls_total,
+          count(*) FILTER (WHERE l.status = 'success')::int AS calls_success,
+          count(*) FILTER (WHERE l.status <> 'success')::int AS calls_failed
+        FROM public.geo_ops_api_call_logs l
+        LEFT JOIN public.geo_ops_scripts s ON s.script_key = l.script_key
+        WHERE (
+            l.provider_code LIKE 'endata%'
+            OR lower(COALESCE(l.request_path, '')) IN (
+              '/v2/xhs/getstandardnoteinfo',
+              '/v2/xhs/getstandardusernotelist',
+              '/v2/xhs/getxhsnotelist_gb'
+            )
+          )
+          AND l.started_at >= now() - interval '72 hours'
+        GROUP BY 1, 2, 3, 4, 5
+        ORDER BY bucket_start, calls_total DESC, script_key
+        `,
+      ),
+      query(
+        client,
+        `
         SELECT
           m.model_config_id,
           m.provider_code,
@@ -642,6 +913,17 @@ module.exports = async function handler(req, res) {
         `,
       ),
     ]);
+    const endataEndpoints = endataEndpointDetails.length ? endataEndpointDetails.map(enrichEndataEndpoint) : endataEndpointCatalog;
+    const enrichedEndataHistory = endataEndpointHistory.map(enrichEndataEndpoint);
+    const enrichedEndataScriptUsage = endataScriptUsageHourly.map((row) => {
+      const endpoint = enrichEndataEndpoint(row);
+      return {
+        ...row,
+        endpoint_display_name_cn: endpoint.display_name_cn,
+        endpoint_description_cn: endpoint.description_cn,
+        endpoint_scripts: endpoint.scripts,
+      };
+    });
 
     res.status(200).json({
       source: "database",
@@ -670,6 +952,12 @@ module.exports = async function handler(req, res) {
         scriptRunSummary,
         recentScriptRuns,
         scriptEvents,
+        endataBalance: {
+          latestSnapshots: endataLatestSnapshots,
+          endpoints: endataEndpoints,
+          endpointHistory: enrichedEndataHistory,
+          scriptUsageHourly: enrichedEndataScriptUsage,
+        },
         modelConfigs,
         credentials,
         rateLimitRules,

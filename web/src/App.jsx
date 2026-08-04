@@ -5,7 +5,6 @@ import {
   Brain,
   CheckCircle2,
   Clock3,
-  Cpu,
   Database,
   FileText,
   Filter,
@@ -15,7 +14,6 @@ import {
   ListChecks,
   RefreshCcw,
   Search,
-  Server,
   Sparkles,
   Target,
   Users,
@@ -27,6 +25,8 @@ import { sampleDashboard } from "./sampleData.js";
 
 const numberFormatter = new Intl.NumberFormat("zh-CN");
 const compactFormatter = new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 1 });
+const moneyFormatter = new Intl.NumberFormat("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const percentFormatter = new Intl.NumberFormat("zh-CN", { minimumFractionDigits: 1, maximumFractionDigits: 2 });
 const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
   month: "2-digit",
   day: "2-digit",
@@ -68,11 +68,43 @@ function formatCompact(value) {
   return compactFormatter.format(Number(value));
 }
 
+function formatMoney(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  return moneyFormatter.format(number);
+}
+
+function formatMoneyDelta(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  if (number > 0) return `+${formatMoney(number)}`;
+  if (number < 0) return `-${formatMoney(Math.abs(number))}`;
+  return "0.00";
+}
+
 function formatDelta(value) {
   const number = Number(value || 0);
   if (number > 0) return `+${formatCompact(number)}`;
   if (number < 0) return `-${formatCompact(Math.abs(number))}`;
   return "0";
+}
+
+function formatSignedNumber(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  if (number > 0) return `+${formatNumber(number)}`;
+  if (number < 0) return `-${formatNumber(Math.abs(number))}`;
+  return "0";
+}
+
+function formatPercent(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  return `${percentFormatter.format(number)}%`;
 }
 
 function formatScore(value) {
@@ -136,6 +168,22 @@ function providerTypeLabel(value) {
 function providerDisplayName(item) {
   const code = typeof item === "string" ? item : item?.provider_code;
   return providerLabels[code] || (typeof item === "string" ? item : item?.display_name_cn) || code || "-";
+}
+
+function endataRangeLabel(value) {
+  const labels = {
+    today: "今日",
+    yesterday: "昨日",
+    month: "本月",
+  };
+  return labels[value] || value || "-";
+}
+
+function deltaClass(value) {
+  const number = Number(value || 0);
+  if (number > 0) return "endata-delta-up";
+  if (number < 0) return "endata-delta-down";
+  return "endata-delta-flat";
 }
 
 function compactProviderLabel(value) {
@@ -752,6 +800,233 @@ function ApiStatusComboChart({ rows, selectedProvider, selectedStatus, onSelect 
   );
 }
 
+function EndataCompactPanel({ endata }) {
+  const snapshots = endata?.latestSnapshots || [];
+  const endpoints = endata?.endpoints || [];
+  const latestSnapshot = snapshots.find((item) => item.range_key === "today") || snapshots[0] || {};
+  const topEndpoints = endpoints.slice(0, 3);
+
+  return (
+    <section className="panel">
+      <SectionHeader icon={Gauge} title="艺恩余额概览" action={<StatusPill tone={latestSnapshot.ok === false ? "red" : "green"}>{latestSnapshot.ok === false ? "异常" : "正常"}</StatusPill>} />
+      {snapshots.length || endpoints.length ? (
+        <>
+          <div className="endata-compact-total">
+            <div>
+              <span>当前余额</span>
+              <strong>{formatMoney(latestSnapshot.residue_fee)}</strong>
+            </div>
+            <em className={`endata-delta ${deltaClass(latestSnapshot.balance_delta)}`}>较上次 {formatMoneyDelta(latestSnapshot.balance_delta)}</em>
+          </div>
+          <div className="endata-mini-list">
+            {topEndpoints.map((item) => (
+              <div className="endata-mini-row" key={item.url}>
+                <div>
+                  <strong>{item.display_name_cn || item.url}</strong>
+                  <span>{item.url}</span>
+                </div>
+                <div className="endata-mini-metric">
+                  <b>{formatNumber(item.count)}</b>
+                  <small className={deltaClass(item.count_delta)}>{formatSignedNumber(item.count_delta)}</small>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="endata-compact-foot">
+            <span>今日成功 {formatNumber(latestSnapshot.success_count)}</span>
+            <span>采样 {formatDateTimeSecond(latestSnapshot.sampled_at)}</span>
+          </div>
+        </>
+      ) : (
+        <div className="empty-state">暂无艺恩余额快照</div>
+      )}
+    </section>
+  );
+}
+
+function EndataBalancePanel({ endata }) {
+  const snapshots = endata?.latestSnapshots || [];
+  const endpoints = endata?.endpoints || [];
+  const endpointHistory = (endata?.endpointHistory || []).map((item) => ({
+    ...item,
+    bucket_start: item.bucket_start,
+    display_name_cn: item.display_name_cn || item.url,
+  }));
+  const scriptUsageRows = (endata?.scriptUsageHourly || []).map((item) => ({
+    ...item,
+    bucket_start: normalizeBucketStart(item.bucket_start, "hourly"),
+    display_name_cn: item.display_name_cn || item.script_key || "未记录脚本",
+  }));
+  const latestSnapshot = snapshots.find((item) => item.range_key === "today") || snapshots[0] || {};
+  const monthSnapshot = snapshots.find((item) => item.range_key === "month") || {};
+  const endpointSeriesDomain = useMemo(() => {
+    const entries = [...endpoints, ...endpointHistory]
+      .filter((item) => item.url)
+      .map((item) => [item.url, { id: item.url, label: item.display_name_cn || item.url }]);
+    return Array.from(new Map(entries).values()).slice(0, 8);
+  }, [endpoints, endpointHistory]);
+  const scriptSeriesDomain = useMemo(() => {
+    const entries = scriptUsageRows
+      .filter((item) => item.script_key)
+      .map((item) => [item.script_key, { id: item.script_key, label: item.display_name_cn || item.script_key }]);
+    return Array.from(new Map(entries).values()).slice(0, 8);
+  }, [scriptUsageRows]);
+  const scriptSummary = useMemo(() => {
+    const byScript = new Map();
+    scriptUsageRows.forEach((row) => {
+      const key = row.script_key || "unknown";
+      const current = byScript.get(key) || {
+        script_key: key,
+        display_name_cn: row.display_name_cn || key,
+        calls_total: 0,
+        calls_success: 0,
+        calls_failed: 0,
+        endpoints: new Set(),
+      };
+      current.calls_total += Number(row.calls_total || 0);
+      current.calls_success += Number(row.calls_success || 0);
+      current.calls_failed += Number(row.calls_failed || 0);
+      if (row.endpoint_display_name_cn || row.url) current.endpoints.add(row.endpoint_display_name_cn || row.url);
+      byScript.set(key, current);
+    });
+    return Array.from(byScript.values())
+      .map((item) => ({ ...item, endpoints: Array.from(item.endpoints) }))
+      .sort((a, b) => b.calls_total - a.calls_total || a.script_key.localeCompare(b.script_key));
+  }, [scriptUsageRows]);
+
+  return (
+    <section className="panel endata-panel">
+      <SectionHeader icon={Gauge} title="艺恩余额与接口消耗" action={<StatusPill tone="neutral">30 秒刷新</StatusPill>} />
+
+      <div className="endata-summary-grid">
+        <div className="endata-metric-card">
+          <span>当前余额</span>
+          <strong>{formatMoney(latestSnapshot.residue_fee)}</strong>
+          <small className={`endata-delta ${deltaClass(latestSnapshot.balance_delta)}`}>较上次 {formatMoneyDelta(latestSnapshot.balance_delta)}</small>
+        </div>
+        <div className="endata-metric-card">
+          <span>今日成功调用</span>
+          <strong>{formatNumber(latestSnapshot.success_count)}</strong>
+          <small className={`endata-delta ${deltaClass(latestSnapshot.success_count_delta)}`}>较上次 {formatSignedNumber(latestSnapshot.success_count_delta)}</small>
+        </div>
+        <div className="endata-metric-card">
+          <span>本月成功调用</span>
+          <strong>{formatNumber(monthSnapshot.success_count)}</strong>
+          <small>{monthSnapshot.begin_code && monthSnapshot.end_code ? `${monthSnapshot.begin_code} - ${monthSnapshot.end_code}` : "暂无本月快照"}</small>
+        </div>
+        <div className="endata-metric-card">
+          <span>最近采样</span>
+          <strong>{formatDate(latestSnapshot.sampled_at)}</strong>
+          <small>
+            {endataRangeLabel(latestSnapshot.range_key)} · {latestSnapshot.ok === false ? latestSnapshot.msg || "异常" : `耗时 ${formatDuration(latestSnapshot.latency_ms)}`}
+          </small>
+        </div>
+      </div>
+
+      <div className="endata-chart-grid">
+        <div className="endata-chart-block">
+          <div className="endata-block-title">
+            <strong>接口累计调用波动</strong>
+            <span>艺恩余额接口快照</span>
+          </div>
+          <LineChart
+            rows={endpointHistory}
+            seriesKey="url"
+            seriesLabelKey="display_name_cn"
+            seriesDomain={endpointSeriesDomain}
+            valueKey="count"
+            bucketLabel="采样时间"
+            yLabel="累计成功调用"
+            emptyLabel="暂无接口调用快照"
+          />
+        </div>
+        <div className="endata-chart-block">
+          <div className="endata-block-title">
+            <strong>脚本调用波动</strong>
+            <span>近 72 小时网关日志</span>
+          </div>
+          <LineChart
+            rows={scriptUsageRows}
+            seriesKey="script_key"
+            seriesLabelKey="display_name_cn"
+            seriesDomain={scriptSeriesDomain}
+            valueKey="calls_total"
+            bucketLabel="小时"
+            yLabel="艺恩调用次数"
+            emptyLabel="暂无脚本调用日志"
+          />
+        </div>
+      </div>
+
+      <div className="endata-script-breakdown">
+        {scriptSummary.length ? (
+          scriptSummary.slice(0, 6).map((item) => (
+            <div className="endata-script-row" key={item.script_key}>
+              <div>
+                <strong>{item.display_name_cn}</strong>
+                <span>{item.script_key}</span>
+              </div>
+              <div className="endata-script-metrics">
+                <b>{formatNumber(item.calls_total)}</b>
+                <small>
+                  成功 {formatNumber(item.calls_success)} · 失败 {formatNumber(item.calls_failed)}
+                </small>
+                <em>{item.endpoints.join(" / ") || "-"}</em>
+              </div>
+            </div>
+          ))
+        ) : (
+          <div className="empty-state">暂无脚本调用拆分</div>
+        )}
+      </div>
+
+      <div className="table-wrap endata-table-wrap">
+        <table className="endata-endpoint-table">
+          <thead>
+            <tr>
+              <th>接口路径</th>
+              <th>中文解释</th>
+              <th>调用情况</th>
+              <th>相关脚本</th>
+            </tr>
+          </thead>
+          <tbody>
+            {endpoints.map((item) => (
+              <tr key={item.url}>
+                <td>
+                  <code className="endata-path">{item.url}</code>
+                  <div className="note-meta">采样 {formatDateTimeSecond(item.sampled_at)}</div>
+                </td>
+                <td>
+                  <div className="note-title">{item.display_name_cn || item.url}</div>
+                  <div className="endata-description">{item.description_cn || "-"}</div>
+                </td>
+                <td>
+                  <div className="endata-call-metric">
+                    <strong>{formatNumber(item.count)}</strong>
+                    <span>{formatPercent(item.share_pct)}</span>
+                    <small className={`endata-delta ${deltaClass(item.count_delta)}`}>较上次 {formatSignedNumber(item.count_delta)}</small>
+                  </div>
+                </td>
+                <td>
+                  <div className="endpoint-script-tags">
+                    {(item.scripts || []).map((script) => (
+                      <span key={`${item.url}-${script.script_key}-${script.scope}`}>
+                        {script.display_name_cn}
+                        <em>{script.scope}</em>
+                      </span>
+                    ))}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function DashboardTable({ rows }) {
   return (
     <div className="table-wrap">
@@ -956,7 +1231,7 @@ function OpsDashboard({ data }) {
   const [chartMonth, setChartMonth] = useState("latest");
   const [visibleDays, setVisibleDays] = useState(14);
   const ops = data?.ops || {};
-  const overview = ops.overview || {};
+  const endataBalance = ops.endataBalance || {};
   const apiRows = ops.apiStatusSummary || [];
   const providerLabelByCode = useMemo(() => new Map(apiRows.map((item) => [item.provider_code, providerDisplayName(item)])), [apiRows]);
   const recentApiRows = (ops.recentApiCalls || []).map((item) => ({
@@ -1073,13 +1348,6 @@ function OpsDashboard({ data }) {
 
   return (
     <>
-      <section className="stats-grid">
-        <Stat icon={Gauge} label="API 调用" value={formatNumber(overview.apiCallsTotal)} sub={`失败 ${formatNumber(overview.apiCallsFailed || 0)}`} />
-        <Stat icon={Brain} label="模型 Tokens" value={formatCompact(overview.totalTokens)} sub="按 provider usage 汇总" tone="teal" />
-        <Stat icon={Server} label="运行脚本" value={formatNumber(overview.runningScripts)} sub={`活跃 API ${formatNumber(overview.activeProviders)}`} tone="purple" />
-        <Stat icon={Cpu} label="模型配置" value={formatNumber(overview.activeModels)} sub="LLM / Vision / Embedding" tone="amber" />
-      </section>
-
       <section className="chart-time-toolbar">
         <div className="chart-time-meta">
           <strong>曲线时间窗口</strong>
@@ -1290,23 +1558,10 @@ function OpsDashboard({ data }) {
           </div>
         </section>
 
-        <section className="panel">
-          <SectionHeader icon={FileText} title="脚本事件流" />
-          <div className="event-stream">
-            {(ops.scriptEvents || []).map((event) => (
-              <div className={`event-item event-${event.level}`} key={event.event_id}>
-                <div>
-                  <strong>{event.message}</strong>
-                  <span>
-                    {event.display_name_cn || event.script_key} · {event.event_type} · {formatDate(event.event_time)}
-                  </span>
-                </div>
-                <StatusPill tone={event.level === "error" ? "red" : "neutral"}>{event.level}</StatusPill>
-              </div>
-            ))}
-          </div>
-        </section>
+        <EndataCompactPanel endata={endataBalance} />
       </section>
+
+      <EndataBalancePanel endata={endataBalance} />
     </>
   );
 }
@@ -1414,26 +1669,31 @@ export default function App() {
   const [filter, setFilter] = useState("");
   const [activeView, setActiveView] = useState("content");
 
-  async function loadDashboard() {
-    setLoading(true);
-    setError("");
+  async function loadDashboard(options = {}) {
+    const isBackground = Boolean(options.background);
+    if (!isBackground) {
+      setLoading(true);
+      setError("");
+    }
     try {
       const response = await fetch("/api/dashboard");
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.message || "dashboard request failed");
       setData(payload);
     } catch (err) {
-      setData(sampleDashboard);
-      if (!String(err.message || "").includes("Unexpected token '<'")) {
+      setData((current) => current || sampleDashboard);
+      if (!isBackground && !String(err.message || "").includes("Unexpected token '<'")) {
         setError(`使用样例数据预览：${err.message}`);
       }
     } finally {
-      setLoading(false);
+      if (!isBackground) setLoading(false);
     }
   }
 
   useEffect(() => {
     loadDashboard();
+    const timer = window.setInterval(() => loadDashboard({ background: true }), 30000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const isSample = data?.source === "sample";
