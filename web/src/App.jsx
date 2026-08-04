@@ -79,6 +79,13 @@ function formatDate(value) {
   return dateFormatter.format(new Date(value));
 }
 
+function formatDateTimeSecond(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return `${date.getMonth() + 1}月${date.getDate()}日${padDatePart(date.getHours())}时${padDatePart(date.getMinutes())}分${padDatePart(date.getSeconds())}秒`;
+}
+
 function formatShortDate(value) {
   if (!value) return "-";
   return shortDateFormatter.format(new Date(value));
@@ -474,6 +481,242 @@ function LineChart({
   );
 }
 
+function ApiStatusComboChart({ rows, selectedProvider, selectedStatus, onSelect }) {
+  const [hoverProvider, setHoverProvider] = useState(null);
+  const prepared = useMemo(() => {
+    const chartRows = rows
+      .map((item) => {
+        const label = providerDisplayName(item);
+        const cleanLabel = label.replace(/（.*?）/g, "").replace("火山 Ark", "火山").trim();
+        return {
+          ...item,
+          label,
+          shortLabel: cleanLabel.length > 13 ? `${cleanLabel.slice(0, 13)}...` : cleanLabel,
+          calls_success: Number(item.calls_success || 0),
+          calls_failed: Number(item.calls_failed || 0),
+          calls_total: Number(item.calls_total || 0),
+          total_tokens: Number(item.total_tokens || 0),
+        };
+      })
+      .filter((item) => item.provider_code);
+    const width = 900;
+    const height = 360;
+    const padLeft = 62;
+    const padRight = 88;
+    const padTop = 28;
+    const padBottom = 92;
+    const innerW = width - padLeft - padRight;
+    const innerH = height - padTop - padBottom;
+    const maxCalls = Math.max(1, ...chartRows.map((item) => item.calls_total));
+    const maxTokens = Math.max(1, ...chartRows.map((item) => item.total_tokens));
+    const callTicks = [...new Set([0, Math.ceil(maxCalls / 2), maxCalls])];
+    const tokenTicks = [...new Set([0, Math.ceil(maxTokens / 2), maxTokens])];
+    const slotW = chartRows.length ? innerW / chartRows.length : innerW;
+    const barW = Math.max(24, Math.min(64, slotW * 0.52));
+    const baseY = padTop + innerH;
+    const yCall = (value) => baseY - (Number(value || 0) / maxCalls) * innerH;
+    const yToken = (value) => baseY - (Number(value || 0) / maxTokens) * innerH;
+    const positionedRows = chartRows.map((row, index) => {
+      const x = padLeft + slotW * index + slotW / 2;
+      const successH = baseY - yCall(row.calls_success);
+      const failedH = baseY - yCall(row.calls_failed);
+      const successY = baseY - successH;
+      const failedY = successY - failedH;
+      return { ...row, x, successH, failedH, successY, failedY, tokenY: yToken(row.total_tokens) };
+    });
+    const tokenLineD = positionedRows.length
+      ? `M ${positionedRows.map((point) => `${point.x.toFixed(1)},${point.tokenY.toFixed(1)}`).join(" L ")}`
+      : "";
+    return {
+      positionedRows,
+      width,
+      height,
+      padLeft,
+      padRight,
+      padTop,
+      padBottom,
+      innerW,
+      innerH,
+      baseY,
+      barW,
+      maxCalls,
+      maxTokens,
+      callTicks,
+      tokenTicks,
+      yCall,
+      yToken,
+      tokenLineD,
+    };
+  }, [rows]);
+
+  if (!prepared.positionedRows.length) {
+    return <div className="empty-state">暂无 API 调用概况</div>;
+  }
+
+  const hovered = prepared.positionedRows.find((item) => item.provider_code === hoverProvider);
+  const tooltipLeft = hovered ? Math.min(76, Math.max(24, (hovered.x / prepared.width) * 100)) : 50;
+
+  function selectSegment(event, providerCode, status) {
+    event.preventDefault();
+    onSelect(providerCode, status);
+  }
+
+  function handleSegmentKeyDown(event, providerCode, status) {
+    if (event.key === "Enter" || event.key === " ") {
+      selectSegment(event, providerCode, status);
+    }
+  }
+
+  return (
+    <div className="api-combo-chart">
+      <svg className="api-combo-svg" viewBox={`0 0 ${prepared.width} ${prepared.height}`} role="img" aria-label="API 调用成功失败和 tokens 组合图">
+        <title>API 调用情况：堆积柱为成功和失败次数，折线为 tokens</title>
+        {prepared.callTicks.map((tick) => {
+          const y = prepared.yCall(tick);
+          return (
+            <g key={`call-${tick}`}>
+              <line x1={prepared.padLeft} x2={prepared.width - prepared.padRight} y1={y} y2={y} className={tick === 0 ? "chart-axis" : "chart-grid"} />
+              <text x={prepared.padLeft - 10} y={y + 4} textAnchor="end" className="chart-label">
+                {formatCompact(tick)}
+              </text>
+            </g>
+          );
+        })}
+        {prepared.tokenTicks.map((tick) => {
+          const y = prepared.yToken(tick);
+          return (
+            <text key={`token-${tick}`} x={prepared.width - prepared.padRight + 12} y={y + 4} className="chart-label combo-token-tick">
+              {formatCompact(tick)}
+            </text>
+          );
+        })}
+        <line x1={prepared.padLeft} x2={prepared.padLeft} y1={prepared.padTop} y2={prepared.baseY} className="chart-axis" />
+        <line x1={prepared.width - prepared.padRight} x2={prepared.width - prepared.padRight} y1={prepared.padTop} y2={prepared.baseY} className="chart-axis" />
+        <text x={prepared.padLeft} y={12} className="chart-axis-title">
+          左轴：调用次数
+        </text>
+        <text x={prepared.width - prepared.padRight} y={12} textAnchor="end" className="chart-axis-title">
+          右轴：tokens
+        </text>
+
+        {prepared.positionedRows.map((row) => {
+          const successSelected = selectedProvider === row.provider_code && selectedStatus === "success";
+          const failedSelected = selectedProvider === row.provider_code && selectedStatus === "failed";
+          return (
+            <g
+              key={row.provider_code}
+              onMouseEnter={() => setHoverProvider(row.provider_code)}
+              onMouseLeave={() => setHoverProvider(null)}
+              onFocus={() => setHoverProvider(row.provider_code)}
+              onBlur={() => setHoverProvider(null)}
+            >
+              {row.calls_success > 0 ? (
+                <rect
+                  className={`combo-bar-segment combo-bar-success ${successSelected ? "selected" : ""}`}
+                  x={row.x - prepared.barW / 2}
+                  y={row.successY}
+                  width={prepared.barW}
+                  height={row.successH}
+                  rx="3"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${row.label} 成功 ${row.calls_success} 次，点击查看成功明细`}
+                  onClick={(event) => selectSegment(event, row.provider_code, "success")}
+                  onKeyDown={(event) => handleSegmentKeyDown(event, row.provider_code, "success")}
+                />
+              ) : null}
+              {row.calls_failed > 0 ? (
+                <rect
+                  className={`combo-bar-segment combo-bar-failed ${failedSelected ? "selected" : ""}`}
+                  x={row.x - prepared.barW / 2}
+                  y={row.failedY}
+                  width={prepared.barW}
+                  height={row.failedH}
+                  rx="3"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${row.label} 失败 ${row.calls_failed} 次，点击查看失败明细`}
+                  onClick={(event) => selectSegment(event, row.provider_code, "failed")}
+                  onKeyDown={(event) => handleSegmentKeyDown(event, row.provider_code, "failed")}
+                />
+              ) : null}
+              <text x={row.x} y={Math.max(prepared.padTop + 12, row.failedY - 7)} textAnchor="middle" className="combo-total-label">
+                {formatCompact(row.calls_total)}
+              </text>
+              {row.successH >= 22 ? (
+                <text x={row.x} y={row.successY + row.successH / 2 + 4} textAnchor="middle" className="combo-segment-label">
+                  {formatCompact(row.calls_success)}
+                </text>
+              ) : null}
+              {row.failedH >= 22 ? (
+                <text x={row.x} y={row.failedY + row.failedH / 2 + 4} textAnchor="middle" className="combo-segment-label">
+                  {formatCompact(row.calls_failed)}
+                </text>
+              ) : null}
+              <text x={row.x} y={prepared.height - 58} textAnchor="middle" className="chart-label combo-x-label">
+                {row.shortLabel}
+              </text>
+              <text x={row.x} y={prepared.height - 39} textAnchor="middle" className="chart-label combo-success-label">
+                成{formatCompact(row.calls_success)}
+              </text>
+              <text x={row.x} y={prepared.height - 22} textAnchor="middle" className="chart-label combo-failed-label">
+                败{formatCompact(row.calls_failed)}
+              </text>
+            </g>
+          );
+        })}
+
+        <path d={prepared.tokenLineD} fill="none" stroke="var(--purple)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="combo-token-line" />
+        {prepared.positionedRows.map((row) => (
+          <circle
+            key={`${row.provider_code}-token`}
+            cx={row.x}
+            cy={row.tokenY}
+            r="4.5"
+            className="combo-token-dot"
+            onMouseEnter={() => setHoverProvider(row.provider_code)}
+            onMouseLeave={() => setHoverProvider(null)}
+          />
+        ))}
+        <text x={prepared.width - prepared.padRight} y={prepared.height - 7} textAnchor="end" className="chart-axis-title">
+          横轴：API 名称
+        </text>
+      </svg>
+
+      {hovered ? (
+        <div className="api-combo-tooltip" style={{ left: `${tooltipLeft}%` }}>
+          <strong>{hovered.label}</strong>
+          <div className="api-combo-tooltip-grid">
+            <span>成功</span>
+            <b className="combo-success-text">{formatNumber(hovered.calls_success)}</b>
+            <span>失败</span>
+            <b className="combo-failed-text">{formatNumber(hovered.calls_failed)}</b>
+            <span>Tokens</span>
+            <b>{formatCompact(hovered.total_tokens)}</b>
+            <span>涉及笔记</span>
+            <b>{formatNumber(hovered.notes_total)}</b>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="api-combo-legend">
+        <span>
+          <i className="legend-success" />
+          成功次数
+        </span>
+        <span>
+          <i className="legend-failed" />
+          失败次数
+        </span>
+        <span>
+          <i className="legend-token" />
+          tokens
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function DashboardTable({ rows }) {
   return (
     <div className="table-wrap">
@@ -766,6 +1009,8 @@ function OpsDashboard({ data }) {
       `状态：${item.status}`,
       `错误码：${item.error_code || "-"}`,
       `次数：${formatNumber(item.count)}`,
+      `首次发生：${formatDateTimeSecond(item.first_started_at)}`,
+      `最近发生：${formatDateTimeSecond(item.latest_started_at)}`,
       `原因：${item.error_message || "-"}`,
     ].join("\n");
   }
@@ -778,6 +1023,11 @@ function OpsDashboard({ data }) {
     }
     setCopiedReasonKey(key);
     window.setTimeout(() => setCopiedReasonKey(""), 1200);
+  }
+
+  function handleApiComboSelect(providerCode, status) {
+    setDetailProvider(providerCode);
+    setDetailStatus(status);
   }
 
   return (
@@ -855,53 +1105,12 @@ function OpsDashboard({ data }) {
       <section className="ops-grid ops-grid-uneven">
         <section className="panel">
           <SectionHeader icon={Activity} title="API 调用概况" />
-          <div className="ops-table-list">
-            {apiRows.map((item) => (
-              <div
-                className={`ops-row ops-row-button ${detailProvider === item.provider_code ? "selected" : ""}`}
-                key={item.provider_code}
-                onClick={() => setDetailProvider(item.provider_code)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") setDetailProvider(item.provider_code);
-                }}
-                role="button"
-                tabIndex={0}
-              >
-                <div>
-                  <strong>{providerDisplayName(item)}</strong>
-                  <span>
-                    {providerTypeLabel(item.provider_type)} · {item.billing_unit || "call"} · 涉及笔记 {formatNumber(item.notes_total)}
-                  </span>
-                </div>
-                <div className="ops-metrics">
-                  <b>{formatNumber(item.calls_total)}</b>
-                  <button
-                    className="metric-button metric-success"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setDetailProvider(item.provider_code);
-                      setDetailStatus("success");
-                    }}
-                    type="button"
-                  >
-                    成功 {formatNumber(item.calls_success)}
-                  </button>
-                  <button
-                    className={`metric-button ${Number(item.calls_failed) ? "metric-failed" : ""}`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setDetailProvider(item.provider_code);
-                      setDetailStatus("failed");
-                    }}
-                    type="button"
-                  >
-                    业务/接口失败 {formatNumber(item.calls_failed)}
-                  </button>
-                  <small>{formatCompact(item.total_tokens)} tokens</small>
-                </div>
-              </div>
-            ))}
-          </div>
+          <ApiStatusComboChart
+            rows={apiRows}
+            selectedProvider={detailProvider}
+            selectedStatus={detailStatus}
+            onSelect={handleApiComboSelect}
+          />
         </section>
 
         <section className="panel">
@@ -945,7 +1154,7 @@ function OpsDashboard({ data }) {
               </div>
             }
           />
-          <div className="table-wrap">
+          <div className="table-wrap api-detail-scroll">
             <table className="api-detail-table">
               <thead>
                 <tr>
@@ -973,7 +1182,7 @@ function OpsDashboard({ data }) {
                       <div className="note-meta">{item.note_id || "-"}</div>
                     </td>
                     <td>{item.model_name || "-"}</td>
-                    <td>{formatDate(item.started_at)}</td>
+                    <td>{formatDateTimeSecond(item.started_at)}</td>
                     <td>{formatDuration(item.latency_ms)}</td>
                     <td>
                       <div className="clamped">{item.error_message || item.error_code || "-"}</div>
@@ -987,7 +1196,7 @@ function OpsDashboard({ data }) {
 
         <section className="panel">
           <SectionHeader icon={AlertTriangle} title="失败原因聚合" />
-          <div className="ops-table-list">
+          <div className="ops-table-list failure-reason-scroll">
             {failureReasons.length ? (
               failureReasons.map((item, index) => {
                 const reasonKey = `${item.provider_code}-${item.status}-${item.error_code}-${index}`;
@@ -1003,6 +1212,10 @@ function OpsDashboard({ data }) {
                       <button className="copy-button" onClick={() => copyFailureReason(item, reasonKey)} type="button">
                         {copiedReasonKey === reasonKey ? "已复制" : "复制"}
                       </button>
+                    </div>
+                    <div className="failure-reason-time">
+                      <span>首次：{formatDateTimeSecond(item.first_started_at)}</span>
+                      <span>最近：{formatDateTimeSecond(item.latest_started_at)}</span>
                     </div>
                     <pre className="failure-reason-message">{item.error_message || "-"}</pre>
                   </div>

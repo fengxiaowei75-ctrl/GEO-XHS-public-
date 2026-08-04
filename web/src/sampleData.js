@@ -211,8 +211,24 @@ export const sampleDashboard = {
       },
     ],
     apiFailureReasons: [
-      { provider_code: "endata_xhs_note_detail", status: "failed", error_code: "historical_business_status", error_message: "Code=500 Msg=当前账户余额不足，请确认", count: 86 },
-      { provider_code: "endata_xhs_note_detail", status: "failed", error_code: "historical_business_status", error_message: "Code=500 Msg=请求失败，请重试", count: 24 },
+      {
+        provider_code: "endata_xhs_note_detail",
+        status: "failed",
+        error_code: "historical_business_status",
+        error_message: "Code=500 Msg=当前账户余额不足，请确认",
+        count: 86,
+        first_started_at: "2026-08-04T00:01:45.000Z",
+        latest_started_at: "2026-08-04T02:07:57.000Z",
+      },
+      {
+        provider_code: "endata_xhs_note_detail",
+        status: "failed",
+        error_code: "historical_business_status",
+        error_message: "Code=500 Msg=请求失败，请重试",
+        count: 24,
+        first_started_at: "2026-08-04T00:05:12.000Z",
+        latest_started_at: "2026-08-04T01:38:21.000Z",
+      },
     ],
     apiUsage: {
       hourly: [

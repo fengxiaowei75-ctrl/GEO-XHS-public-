@@ -214,7 +214,9 @@ module.exports = async function handler(req, res) {
           status,
           COALESCE(error_code, 'business_or_unknown') AS error_code,
           COALESCE(NULLIF(error_message, ''), 'NULL_TEXT') AS error_message,
-          count(*)::int AS count
+          count(*)::int AS count,
+          min(started_at) AS first_started_at,
+          max(started_at) AS latest_started_at
         FROM public.geo_ops_api_call_logs
         WHERE status <> 'success'
         GROUP BY provider_code, status, COALESCE(error_code, 'business_or_unknown'), COALESCE(NULLIF(error_message, ''), 'NULL_TEXT')
