@@ -1133,6 +1133,7 @@ function insightSearchText(item) {
   return [
     item.title,
     item.note_id,
+    item.note_date,
     item.author_nickname,
     item.note_type,
     item.core_topic_category,
@@ -1154,6 +1155,14 @@ function InsightNoteTable({ rows, compact = false }) {
   return (
     <div className="table-wrap insight-table-wrap">
       <table className="insight-table">
+        <colgroup>
+          <col className="insight-col-note" />
+          <col className="insight-col-topic" />
+          <col className="insight-col-persona" />
+          <col className="insight-col-metrics" />
+          <col className="insight-col-hook" />
+          <col className="insight-col-business" />
+        </colgroup>
         <thead>
           <tr>
             <th>笔记</th>
@@ -1161,7 +1170,7 @@ function InsightNoteTable({ rows, compact = false }) {
             <th>目标人群</th>
             <th>点赞/收藏/评论</th>
             <th>情绪钩子</th>
-            {!compact ? <th>业务逻辑</th> : null}
+            <th>业务逻辑</th>
           </tr>
         </thead>
         <tbody>
@@ -1170,7 +1179,7 @@ function InsightNoteTable({ rows, compact = false }) {
               <td>
                 <div className="note-title">{item.title || item.note_id}</div>
                 <div className="note-meta">
-                  {item.note_id} · 抓取 {formatDate(item.captured_at)} · 发布 {formatDate(item.publish_time)}
+                  {item.note_id} · 笔记日期 {formatDate(item.note_date || item.publish_time)}
                 </div>
               </td>
               <td>
@@ -1200,11 +1209,9 @@ function InsightNoteTable({ rows, compact = false }) {
                 <div className="clamped">{item.true_pain_label || item.pain_description || "-"}</div>
                 {arrayText(item.hook_types) ? <div className="note-meta">{arrayText(item.hook_types)}</div> : null}
               </td>
-              {!compact ? (
-                <td>
-                  <div className="clamped">{item.business_logic || item.content_logic || "-"}</div>
-                </td>
-              ) : null}
+              <td className="business-logic-cell">
+                <div className="clamped business-logic-text">{item.business_logic || item.content_logic || "-"}</div>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -1572,15 +1579,17 @@ function ContentDashboard({ data, loading, filter, contentStart, contentEnd, onC
     return filteredNotes.filter((item) => (item.primary_target_persona || "未标注") === selectedPersona);
   }, [filteredNotes, selectedPersona]);
 
-  const rangeMeta = overview.minCapturedAt
-    ? `${formatShortDate(overview.minCapturedAt)} - ${formatShortDate(overview.maxCapturedAt)}`
+  const rangeStart = overview.minNoteDate || overview.minCapturedAt;
+  const rangeEnd = overview.maxNoteDate || overview.maxCapturedAt;
+  const rangeMeta = rangeStart
+    ? `${formatShortDate(rangeStart)} - ${formatShortDate(rangeEnd)}`
     : "无数据";
   const activeRangeLabel =
     contentStart || contentEnd ? `${contentStart || "最早"} - ${contentEnd || "今天"}` : "累计";
 
   function applyQuickRange(days) {
-    const maxCapturedDate = /^\d{4}-\d{2}-\d{2}/.test(String(overview.maxCapturedAt || "")) ? String(overview.maxCapturedAt).slice(0, 10) : "";
-    const end = maxCapturedDate || draftEnd || todayInputValue();
+    const maxNoteDate = /^\d{4}-\d{2}-\d{2}/.test(String(rangeEnd || "")) ? String(rangeEnd).slice(0, 10) : "";
+    const end = maxNoteDate || draftEnd || todayInputValue();
     const next = rangeForLastDays(days, end);
     setDraftStart(next.start);
     setDraftEnd(next.end);

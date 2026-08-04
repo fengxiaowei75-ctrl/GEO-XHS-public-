@@ -129,8 +129,10 @@ function sampleData() {
       range: {
         start: "",
         end: "",
-        minCapturedAt: "2026-08-01T00:00:00.000Z",
-        maxCapturedAt: "2026-08-04T00:00:00.000Z",
+        minNoteDate: "2026-05-31T00:00:00.000Z",
+        maxNoteDate: "2026-07-19T00:00:00.000Z",
+        minCapturedAt: "2026-05-31T00:00:00.000Z",
+        maxCapturedAt: "2026-07-19T00:00:00.000Z",
       },
       overview: {
         noteTotal: 90,
@@ -138,8 +140,10 @@ function sampleData() {
         likeTotal: 82400,
         collectedTotal: 28600,
         commentsTotal: 8740,
-        minCapturedAt: "2026-08-01T00:00:00.000Z",
-        maxCapturedAt: "2026-08-04T00:00:00.000Z",
+        minNoteDate: "2026-05-31T00:00:00.000Z",
+        maxNoteDate: "2026-07-19T00:00:00.000Z",
+        minCapturedAt: "2026-05-31T00:00:00.000Z",
+        maxCapturedAt: "2026-07-19T00:00:00.000Z",
       },
       topicFrequency: [
         { core_topic_category: "GEO避坑", note_count: 24, share_pct: 26.67 },
@@ -156,6 +160,7 @@ function sampleData() {
           note_id: "6a1ba9a10000000006031daa",
           title: "每天拆解一个运营知识-GEO排名优化",
           author_nickname: "GEO增长研究所",
+          note_date: "2026-05-31T00:00:00.000Z",
           captured_at: "2026-08-04T00:00:00.000Z",
           publish_time: "2026-05-31T00:00:00.000Z",
           note_type: "图文",
@@ -175,22 +180,22 @@ function sampleData() {
         },
       ],
       trendDaily: [
-        { bucket_date: "2026-07-29", note_count: 8, like_total: 5200, collected_total: 1800, comments_total: 360 },
-        { bucket_date: "2026-07-30", note_count: 10, like_total: 6800, collected_total: 2400, comments_total: 420 },
-        { bucket_date: "2026-07-31", note_count: 7, like_total: 4300, collected_total: 1600, comments_total: 310 },
-        { bucket_date: "2026-08-01", note_count: 12, like_total: 7600, collected_total: 3100, comments_total: 540 },
-        { bucket_date: "2026-08-02", note_count: 15, like_total: 9800, collected_total: 3900, comments_total: 690 },
-        { bucket_date: "2026-08-03", note_count: 16, like_total: 11200, collected_total: 4200, comments_total: 730 },
-        { bucket_date: "2026-08-04", note_count: 22, like_total: 13600, collected_total: 5200, comments_total: 920 },
+        { bucket_date: "2026-07-13", note_count: 8, like_total: 5200, collected_total: 1800, comments_total: 360 },
+        { bucket_date: "2026-07-14", note_count: 10, like_total: 6800, collected_total: 2400, comments_total: 420 },
+        { bucket_date: "2026-07-15", note_count: 7, like_total: 4300, collected_total: 1600, comments_total: 310 },
+        { bucket_date: "2026-07-16", note_count: 12, like_total: 7600, collected_total: 3100, comments_total: 540 },
+        { bucket_date: "2026-07-17", note_count: 15, like_total: 9800, collected_total: 3900, comments_total: 690 },
+        { bucket_date: "2026-07-18", note_count: 16, like_total: 11200, collected_total: 4200, comments_total: 730 },
+        { bucket_date: "2026-07-19", note_count: 22, like_total: 13600, collected_total: 5200, comments_total: 920 },
       ],
       sparklineDaily: [
-        { bucket_date: "2026-07-29", note_count: 8, like_total: 5200, collected_total: 1800, comments_total: 360 },
-        { bucket_date: "2026-07-30", note_count: 10, like_total: 6800, collected_total: 2400, comments_total: 420 },
-        { bucket_date: "2026-07-31", note_count: 7, like_total: 4300, collected_total: 1600, comments_total: 310 },
-        { bucket_date: "2026-08-01", note_count: 12, like_total: 7600, collected_total: 3100, comments_total: 540 },
-        { bucket_date: "2026-08-02", note_count: 15, like_total: 9800, collected_total: 3900, comments_total: 690 },
-        { bucket_date: "2026-08-03", note_count: 16, like_total: 11200, collected_total: 4200, comments_total: 730 },
-        { bucket_date: "2026-08-04", note_count: 22, like_total: 13600, collected_total: 5200, comments_total: 920 },
+        { bucket_date: "2026-07-13", note_count: 8, like_total: 5200, collected_total: 1800, comments_total: 360 },
+        { bucket_date: "2026-07-14", note_count: 10, like_total: 6800, collected_total: 2400, comments_total: 420 },
+        { bucket_date: "2026-07-15", note_count: 7, like_total: 4300, collected_total: 1600, comments_total: 310 },
+        { bucket_date: "2026-07-16", note_count: 12, like_total: 7600, collected_total: 3100, comments_total: 540 },
+        { bucket_date: "2026-07-17", note_count: 15, like_total: 9800, collected_total: 3900, comments_total: 690 },
+        { bucket_date: "2026-07-18", note_count: 16, like_total: 11200, collected_total: 4200, comments_total: 730 },
+        { bucket_date: "2026-07-19", note_count: 22, like_total: 13600, collected_total: 5200, comments_total: 920 },
       ],
     },
     queueStatus: [{ status: "success", count: 199 }],
@@ -402,8 +407,8 @@ module.exports = async function handler(req, res) {
   const contentStart = parseDateParam(req, "contentStart");
   const contentEnd = parseDateParam(req, "contentEnd");
   const contentParams = [];
-  const contentDateColumn = "COALESCE(n.fetched_at, a.created_at)";
-  const contentWhereParts = ["a.analysis_status = 'success'"];
+  const contentDateColumn = "COALESCE(a.publish_time, n.publish_time)";
+  const contentWhereParts = ["a.analysis_status = 'success'", `${contentDateColumn} IS NOT NULL`];
   if (contentStart) {
     contentParams.push(contentStart);
     contentWhereParts.push(`${contentDateColumn} >= $${contentParams.length}::date`);
@@ -668,6 +673,8 @@ module.exports = async function handler(req, res) {
           COALESCE(sum(a.like_count), 0)::bigint AS "likeTotal",
           COALESCE(sum(a.collected_count), 0)::bigint AS "collectedTotal",
           COALESCE(sum(a.comments_count), 0)::bigint AS "commentsTotal",
+          min(${contentDateColumn}) AS "minNoteDate",
+          max(${contentDateColumn}) AS "maxNoteDate",
           min(${contentDateColumn}) AS "minCapturedAt",
           max(${contentDateColumn}) AS "maxCapturedAt",
           min(a.publish_time) AS "minPublishTime",
@@ -722,7 +729,8 @@ module.exports = async function handler(req, res) {
             a.note_id
           ) AS title,
           a.author_nickname,
-          ${contentDateColumn} AS captured_at,
+          ${contentDateColumn} AS note_date,
+          n.fetched_at AS captured_at,
           a.publish_time,
           a.note_type,
           a.core_topic_category,
@@ -1280,6 +1288,8 @@ module.exports = async function handler(req, res) {
             range: {
               start: contentStart,
               end: contentEnd,
+              minNoteDate: contentOverviewRows[0]?.minNoteDate || null,
+              maxNoteDate: contentOverviewRows[0]?.maxNoteDate || null,
               minCapturedAt: contentOverviewRows[0]?.minCapturedAt || null,
               maxCapturedAt: contentOverviewRows[0]?.maxCapturedAt || null,
               minPublishTime: contentOverviewRows[0]?.minPublishTime || null,

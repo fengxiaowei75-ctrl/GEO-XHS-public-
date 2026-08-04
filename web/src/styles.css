@@ -1398,10 +1398,45 @@ tbody tr:hover {
 
 .insight-table-wrap {
   max-height: 620px;
+  overflow-x: auto;
+  overflow-y: auto;
 }
 
 .insight-table {
-  min-width: 1080px;
+  min-width: 1500px;
+  table-layout: fixed;
+}
+
+.insight-col-note {
+  width: 360px;
+}
+
+.insight-col-topic {
+  width: 190px;
+}
+
+.insight-col-persona {
+  width: 170px;
+}
+
+.insight-col-metrics {
+  width: 190px;
+}
+
+.insight-col-hook {
+  width: 280px;
+}
+
+.insight-col-business {
+  width: 480px;
+}
+
+.business-logic-cell {
+  min-width: 0;
+}
+
+.business-logic-text {
+  max-width: 450px;
 }
 
 .insight-metrics-mini {
