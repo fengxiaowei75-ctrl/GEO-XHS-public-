@@ -213,11 +213,11 @@ module.exports = async function handler(req, res) {
           provider_code,
           status,
           COALESCE(error_code, 'business_or_unknown') AS error_code,
-          COALESCE(left(error_message, 120), 'NULL_TEXT') AS error_message,
+          COALESCE(NULLIF(error_message, ''), 'NULL_TEXT') AS error_message,
           count(*)::int AS count
         FROM public.geo_ops_api_call_logs
         WHERE status <> 'success'
-        GROUP BY provider_code, status, COALESCE(error_code, 'business_or_unknown'), COALESCE(left(error_message, 120), 'NULL_TEXT')
+        GROUP BY provider_code, status, COALESCE(error_code, 'business_or_unknown'), COALESCE(NULLIF(error_message, ''), 'NULL_TEXT')
         ORDER BY count DESC, provider_code
         LIMIT 40
         `,

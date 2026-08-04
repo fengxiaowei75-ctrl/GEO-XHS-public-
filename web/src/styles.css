@@ -631,14 +631,14 @@ tbody tr:hover {
 
 .chart-wrap {
   position: relative;
-  min-height: 266px;
+  min-height: 306px;
 }
 
 .chart-wrap svg {
   display: block;
   width: 100%;
-  aspect-ratio: 720 / 230;
-  min-height: 210px;
+  aspect-ratio: 720 / 280;
+  min-height: 238px;
 }
 
 .chart-axis {
@@ -649,6 +649,17 @@ tbody tr:hover {
 .chart-grid {
   stroke: #e8ece7;
   stroke-width: 1;
+}
+
+.chart-hover-line {
+  stroke: #8d9890;
+  stroke-dasharray: 4 4;
+  stroke-width: 1;
+}
+
+.chart-hover-dot {
+  stroke: #fff;
+  stroke-width: 2;
 }
 
 .chart-label {
@@ -691,6 +702,70 @@ tbody tr:hover {
   height: 9px;
   border-radius: 999px;
   flex: 0 0 auto;
+}
+
+.chart-tooltip {
+  position: absolute;
+  z-index: 5;
+  top: 32px;
+  width: min(420px, calc(100% - 24px));
+  padding: 12px;
+  border: 1px solid #d8dfd7;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 12px 28px rgba(30, 37, 40, 0.14);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.chart-tooltip strong,
+.chart-tooltip span {
+  display: block;
+}
+
+.chart-tooltip span {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chart-tooltip-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.chart-tooltip-row {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.chart-tooltip-row i {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+}
+
+.chart-tooltip-row em {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-style: normal;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chart-tooltip-row b {
+  font-size: 13px;
+}
+
+.chart-tooltip-row small {
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .chart-scale {
@@ -787,6 +862,65 @@ tbody tr:hover {
   border-color: #efb4b1;
   background: #fff0ef;
   color: var(--red);
+}
+
+.failure-reason-card {
+  display: grid;
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid #edf0ec;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.failure-reason-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.failure-reason-top strong,
+.failure-reason-top span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.failure-reason-top span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.failure-reason-message {
+  max-height: 180px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid #e2e7e1;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.copy-button {
+  min-height: 30px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 .api-detail-table {
