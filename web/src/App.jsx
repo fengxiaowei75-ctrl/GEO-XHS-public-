@@ -189,6 +189,11 @@ function structuredText(item) {
     .join("；");
 }
 
+function firstStructuredText(value, fallback = "") {
+  const first = listItems(value)[0];
+  return first ? structuredText(first) : fallback;
+}
+
 function textPreview(value, max = 150) {
   const text = String(value || "").trim();
   if (!text) return "";
@@ -1643,27 +1648,50 @@ function DailyNoteRail({ date, notes, selectedNoteId, onSelectNote }) {
       {notes.length ? (
         <div className="daily-note-strip">
           {notes.map((item) => (
-            <button
+            <article
               className={`daily-note-card ${selectedNoteId === item.note_id ? "active" : ""}`}
               key={item.note_id}
               onClick={() => onSelectNote(item.note_id)}
-              type="button"
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") onSelectNote(item.note_id);
+              }}
+              role="button"
+              tabIndex="0"
             >
-              <div className="daily-note-card-top">
-                <StatusPill tone={item.funnel_role === "转化" ? "green" : item.funnel_role === "信任" ? "blue" : "neutral"}>
-                  {item.funnel_role || item.core_topic_category || "未标注"}
-                </StatusPill>
-                <span>{formatDayLabel(item.note_date || item.publish_time)}</span>
+              <div className="daily-note-basic">
+                <div className="daily-note-card-top">
+                  <StatusPill tone={item.funnel_role === "转化" ? "green" : item.funnel_role === "信任" ? "blue" : "neutral"}>
+                    {item.funnel_role || "未标注漏斗"}
+                  </StatusPill>
+                  <span>{formatDayLabel(item.note_date || item.publish_time)}</span>
+                </div>
+                <strong>{item.title || item.note_id}</strong>
+                <p>{textPreview(noteContentText(item), 132) || "-"}</p>
+                <div className="daily-note-topic-row">
+                  <span>{item.core_topic_category || "未标注话题"}</span>
+                  <span>{arrayText(item.hook_types) || "未标注钩子"}</span>
+                </div>
+                <div className="daily-note-metrics">
+                  <NoteMetricChip label="互动" value={item.interaction_score} />
+                  <NoteMetricChip label="赞" value={item.like_count} />
+                  <NoteMetricChip label="藏" value={item.collected_count} />
+                  <NoteMetricChip label="评" value={item.comments_count} />
+                </div>
               </div>
-              <strong>{item.title || item.note_id}</strong>
-              <p>{textPreview(noteContentText(item), 118) || item.true_pain_label || "-"}</p>
-              <div className="daily-note-metrics">
-                <NoteMetricChip label="互动" value={item.interaction_score} />
-                <NoteMetricChip label="赞" value={item.like_count} />
-                <NoteMetricChip label="藏" value={item.collected_count} />
-                <NoteMetricChip label="评" value={item.comments_count} />
+              <div className="daily-note-insight-grid">
+                <section>
+                  <h3>目标人群及痛点判断</h3>
+                  <strong>{item.primary_target_persona || "未标注人群"}</strong>
+                  <p>{item.true_pain_label || item.pain_description || "-"}</p>
+                  <small>{item.target_persona_reason || item.pain_evidence || ""}</small>
+                </section>
+                <section>
+                  <h3>业务逻辑和可复用角度</h3>
+                  <strong>{item.business_logic || item.content_logic || "-"}</strong>
+                  <p>{firstStructuredText(item.reusable_angles, item.funnel_role_reason || "")}</p>
+                </section>
               </div>
-            </button>
+            </article>
           ))}
         </div>
       ) : (
@@ -1707,10 +1735,30 @@ function TagLine({ values }) {
 }
 
 function NoteAnalysisBoard({ note, onClose }) {
+  useEffect(() => {
+    if (!note) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function handleKeyDown(event) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [note, onClose]);
+
   if (!note) return null;
   const contentText = noteContentText(note);
   return (
-    <section className="note-analysis-board">
+    <div
+      className="note-analysis-modal-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section className="note-analysis-board note-analysis-modal" role="dialog" aria-modal="true" aria-labelledby="note-analysis-title">
       <div className="note-analysis-head">
         <div>
           <div className="note-analysis-kicker">
@@ -1718,7 +1766,7 @@ function NoteAnalysisBoard({ note, onClose }) {
             <StatusPill tone="neutral">{note.primary_target_persona || "未标注人群"}</StatusPill>
             {note.funnel_role ? <StatusPill tone={note.funnel_role === "转化" ? "green" : note.funnel_role === "信任" ? "blue" : "amber"}>{note.funnel_role}</StatusPill> : null}
           </div>
-          <h3>{note.title || note.note_id}</h3>
+          <h3 id="note-analysis-title">{note.title || note.note_id}</h3>
           <p>
             {note.note_id} · {note.author_nickname || "-"} · 笔记日期 {formatDayLabel(note.note_date || note.publish_time)}
           </p>
@@ -1775,27 +1823,14 @@ function NoteAnalysisBoard({ note, onClose }) {
         <DetailTextBlock title="可复用角度">
           <StructuredList value={note.reusable_angles} />
         </DetailTextBlock>
-        <DetailTextBlock title="标题模板">
-          <StructuredList value={note.title_templates} />
-        </DetailTextBlock>
-        <DetailTextBlock title="视觉拆解">
-          <p>{note.visual_group_style_prompt || "-"}</p>
-          <div className="note-inline-meta">
-            <span>{note.visual_main_colors || "未标注主色"}</span>
-            <span>{note.visual_emotion || "未标注情绪"}</span>
-            <span>{note.information_density_level || "未标注密度"}</span>
-          </div>
-          <p>{note.information_density_reason || ""}</p>
-          <p>{note.layout_structure || ""}</p>
-          <p>{note.cover_text_logic || ""}</p>
-        </DetailTextBlock>
         <DetailTextBlock title="承接与风险">
           <p>{note.cta_strategy || "-"}</p>
           <TagLine values={note.hook_types} />
           <StructuredList value={note.risk_flags} />
         </DetailTextBlock>
       </div>
-    </section>
+      </section>
+    </div>
   );
 }
 
@@ -1963,7 +1998,6 @@ function ContentDashboard({ data, loading, filter, contentStart, contentEnd, onC
             selectedNoteId={selectedNoteId}
             onSelectNote={setSelectedNoteId}
           />
-          <NoteAnalysisBoard note={selectedNote} onClose={() => setSelectedNoteId("")} />
         </section>
 
         <section className="panel panel-table">
@@ -2008,6 +2042,7 @@ function ContentDashboard({ data, loading, filter, contentStart, contentEnd, onC
           <InsightNoteTable rows={personaDetailRows} compact />
         </section>
       </section>
+      <NoteAnalysisBoard note={selectedNote} onClose={() => setSelectedNoteId("")} />
     </>
   );
 }
