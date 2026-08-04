@@ -625,6 +625,38 @@ tbody tr:hover {
   box-shadow: 0 1px 2px rgba(30, 37, 40, 0.08);
 }
 
+.chart-time-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 58px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: #fbfcfa;
+}
+
+.chart-time-meta {
+  min-width: 0;
+}
+
+.chart-time-meta strong,
+.chart-time-meta span {
+  display: block;
+}
+
+.chart-time-meta strong {
+  font-size: 14px;
+}
+
+.chart-time-meta span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .ops-chart {
   min-height: 342px;
 }
@@ -774,6 +806,49 @@ tbody tr:hover {
   right: 0;
   color: var(--muted);
   font-size: 12px;
+}
+
+.time-window-slider {
+  display: grid;
+  grid-template-columns: minmax(190px, 260px) minmax(220px, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  min-height: 58px;
+  margin: -2px 0 16px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+}
+
+.time-window-meta {
+  min-width: 0;
+}
+
+.time-window-meta strong,
+.time-window-meta span {
+  display: block;
+}
+
+.time-window-meta span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.time-window-slider input[type="range"] {
+  width: 100%;
+  accent-color: var(--blue);
+}
+
+.time-window-scale {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 82px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .empty-state,
@@ -1027,6 +1102,14 @@ tbody tr:hover {
   .ops-grid-uneven {
     grid-template-columns: 1fr;
   }
+
+  .time-window-slider {
+    grid-template-columns: minmax(190px, 260px) minmax(220px, 1fr);
+  }
+
+  .time-window-scale {
+    grid-column: 2;
+  }
 }
 
 @media (max-width: 760px) {
@@ -1060,6 +1143,19 @@ tbody tr:hover {
   .toolbar,
   .header-actions {
     justify-content: flex-start;
+  }
+
+  .chart-time-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .time-window-slider {
+    grid-template-columns: 1fr;
+  }
+
+  .time-window-scale {
+    grid-column: auto;
   }
 
   .search-box {

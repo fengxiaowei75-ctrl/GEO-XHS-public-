@@ -32,6 +32,10 @@ const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
   hour: "2-digit",
   minute: "2-digit",
 });
+const shortDateFormatter = new Intl.DateTimeFormat("zh-CN", {
+  month: "2-digit",
+  day: "2-digit",
+});
 
 const navItems = [
   { id: "content", label: "内容资产", icon: Database },
@@ -73,6 +77,11 @@ function formatScore(value) {
 function formatDate(value) {
   if (!value) return "-";
   return dateFormatter.format(new Date(value));
+}
+
+function formatShortDate(value) {
+  if (!value) return "-";
+  return shortDateFormatter.format(new Date(value));
 }
 
 function formatDuration(value) {
@@ -206,10 +215,107 @@ function formatBucket(value) {
   return dateFormatter.format(date);
 }
 
+function getMonthKey(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function monthLabel(value) {
+  if (!value) return "无月份";
+  const [year, month] = value.split("-");
+  return `${year}年${month}月`;
+}
+
+function dayStart(value) {
+  const date = new Date(value);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function addDays(value, days) {
+  const date = new Date(value);
+  date.setDate(date.getDate() + days);
+  return date;
+}
+
+function padDatePart(value) {
+  return String(value).padStart(2, "0");
+}
+
+function localDateTimeString(value) {
+  const date = new Date(value);
+  return `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}T${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}:00`;
+}
+
+function normalizeBucketStart(value, range) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  date.setSeconds(0, 0);
+  if (range === "hourly") {
+    date.setMinutes(0, 0, 0);
+  } else {
+    date.setHours(0, 0, 0, 0);
+  }
+  return localDateTimeString(date);
+}
+
+function buildBucketDomain(startDate, endDate, range) {
+  if (!startDate || !endDate) return [];
+  const cursor = new Date(startDate);
+  const end = new Date(endDate);
+  if (Number.isNaN(cursor.getTime()) || Number.isNaN(end.getTime())) return [];
+  if (range === "hourly") {
+    cursor.setMinutes(0, 0, 0);
+    end.setMinutes(0, 0, 0);
+  } else {
+    cursor.setHours(0, 0, 0, 0);
+    end.setHours(0, 0, 0, 0);
+  }
+  const buckets = [];
+  while (cursor <= end) {
+    buckets.push(localDateTimeString(cursor));
+    if (range === "hourly") {
+      cursor.setHours(cursor.getHours() + 1);
+    } else {
+      cursor.setDate(cursor.getDate() + 1);
+    }
+  }
+  return buckets;
+}
+
+function TimeWindowSlider({ days, onChange, startDate, endDate }) {
+  return (
+    <section className="time-window-slider">
+      <div className="time-window-meta">
+        <strong>时间轴</strong>
+        <span>
+          {formatShortDate(startDate)} - {formatShortDate(endDate)} · 窗口 {days} 天
+        </span>
+      </div>
+      <input
+        aria-label="调整折线图时间轴天数"
+        type="range"
+        min="3"
+        max="30"
+        step="1"
+        value={days}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+      <div className="time-window-scale">
+        <span>3天</span>
+        <span>30天</span>
+      </div>
+    </section>
+  );
+}
+
 function LineChart({
   rows,
   seriesKey,
   seriesLabelKey = "display_name_cn",
+  seriesDomain = [],
+  bucketDomain = [],
   valueKey = "calls_total",
   bucketLabel = "时间桶",
   yLabel = "调用次数",
@@ -217,8 +323,15 @@ function LineChart({
 }) {
   const [hoverBucket, setHoverBucket] = useState(null);
   const prepared = useMemo(() => {
-    const buckets = [...new Set(rows.map((item) => item.bucket_start))].sort();
-    const seriesIds = [...new Set(rows.map((item) => item[seriesKey] || item.provider_code || "unknown"))].filter(Boolean).slice(0, 8);
+    const buckets = (bucketDomain.length ? bucketDomain : [...new Set(rows.map((item) => item.bucket_start))]).sort();
+    const seriesLabelById = new Map(seriesDomain.map((item) => [item.id, item.label]));
+    const seriesIds = (
+      seriesDomain.length
+        ? seriesDomain.map((item) => item.id)
+        : [...new Set(rows.map((item) => item[seriesKey] || item.provider_code || "unknown"))]
+    )
+      .filter(Boolean)
+      .slice(0, 8);
     const valueMap = new Map();
     rows.forEach((item) => {
       const id = item[seriesKey] || item.provider_code || "unknown";
@@ -243,7 +356,7 @@ function LineChart({
     });
     const seriesData = seriesIds.map((id, seriesIndex) => {
       const source = rows.find((item) => (item[seriesKey] || item.provider_code || "unknown") === id);
-      const label = source?.[seriesLabelKey] || source?.display_name_cn || id;
+      const label = seriesLabelById.get(id) || source?.[seriesLabelKey] || source?.display_name_cn || id;
       const values = buckets.map((bucket, index) => {
         const value = Number(valueMap.get(`${id}::${bucket}`) || 0);
         const previousBucket = index > 0 ? buckets[index - 1] : null;
@@ -261,9 +374,9 @@ function LineChart({
       };
     });
     return { buckets, bucketIndex, xTicks, yTicks, seriesData, width, height, maxValue, padLeft, padRight, padTop, padBottom, innerW, innerH };
-  }, [rows, seriesKey, seriesLabelKey, valueKey]);
+  }, [rows, seriesKey, seriesLabelKey, seriesDomain, bucketDomain, valueKey]);
 
-  if (!rows.length || !prepared.seriesData.length) {
+  if (!prepared.buckets.length || !prepared.seriesData.length) {
     return <div className="empty-state">{emptyLabel}</div>;
   }
 
@@ -556,6 +669,8 @@ function OpsDashboard({ data }) {
   const [detailProvider, setDetailProvider] = useState("all");
   const [detailStatus, setDetailStatus] = useState("failed");
   const [copiedReasonKey, setCopiedReasonKey] = useState("");
+  const [chartMonth, setChartMonth] = useState("latest");
+  const [visibleDays, setVisibleDays] = useState(14);
   const ops = data?.ops || {};
   const overview = ops.overview || {};
   const apiRows = ops.apiStatusSummary || [];
@@ -573,11 +688,52 @@ function OpsDashboard({ data }) {
     return providerMatched && statusMatched;
   });
   const failureReasons = (ops.apiFailureReasons || []).filter((item) => detailProvider === "all" || item.provider_code === detailProvider);
-  const usageRows = (ops.apiUsage?.[range] || []).map((item) => ({
+  const rawUsageRows = (ops.apiUsage?.[range] || []).map((item) => ({
     ...item,
+    bucket_start: normalizeBucketStart(item.bucket_start, range),
     provider_label: providerLabelByCode.get(item.provider_code) || providerDisplayName(item),
     model_label: item.model_name || providerLabelByCode.get(item.provider_code) || providerDisplayName(item),
   }));
+  const monthOptions = useMemo(() => {
+    const months = new Map();
+    rawUsageRows.forEach((item) => {
+      const key = getMonthKey(item.bucket_start);
+      if (!key) return;
+      const current = months.get(key) || { value: key, latest: 0, count: 0 };
+      current.latest = Math.max(current.latest, new Date(item.bucket_start).getTime());
+      current.count += Number(item.calls_total || 0);
+      months.set(key, current);
+    });
+    return Array.from(months.values()).sort((a, b) => b.latest - a.latest);
+  }, [rawUsageRows]);
+  useEffect(() => {
+    if (chartMonth !== "latest" && !monthOptions.some((item) => item.value === chartMonth)) {
+      setChartMonth("latest");
+    }
+  }, [chartMonth, monthOptions]);
+  const activeMonth = chartMonth === "latest" ? monthOptions[0]?.value || "" : chartMonth;
+  const monthRows = rawUsageRows.filter((item) => getMonthKey(item.bucket_start) === activeMonth);
+  const monthEndDate = monthRows.length
+    ? new Date(Math.max(...monthRows.map((item) => new Date(item.bucket_start).getTime())))
+    : null;
+  const activeMonthStart = activeMonth ? new Date(Number(activeMonth.slice(0, 4)), Number(activeMonth.slice(5, 7)) - 1, 1) : null;
+  const windowEnd = monthEndDate ? dayStart(monthEndDate) : null;
+  const requestedWindowStart = windowEnd ? addDays(windowEnd, -(visibleDays - 1)) : null;
+  const windowStart =
+    requestedWindowStart && activeMonthStart && requestedWindowStart < activeMonthStart ? activeMonthStart : requestedWindowStart;
+  const windowEndExclusive = windowEnd ? addDays(windowEnd, 1) : null;
+  const bucketDomain =
+    windowStart && monthEndDate && range !== "weekly" ? buildBucketDomain(windowStart, range === "hourly" ? monthEndDate : windowEnd, range) : [];
+  const usageRows = monthRows.filter((item) => {
+    if (!windowStart || !windowEndExclusive) return true;
+    const bucketDate = new Date(item.bucket_start);
+    return bucketDate >= windowStart && bucketDate < windowEndExclusive;
+  });
+  const chartMonthOptions = [
+    { value: "latest", label: activeMonth ? `最近月份（${monthLabel(activeMonth)}）` : "最近月份" },
+    ...monthOptions.map((item) => ({ value: item.value, label: `${monthLabel(item.value)} · ${formatCompact(item.count)}次` })),
+  ];
+  const rangeLabel = range === "hourly" ? "小时" : range === "daily" ? "日期" : "周";
   const providerOptions = [
     { value: "all", label: "全部 API" },
     ...apiRows.map((item) => ({ value: item.provider_code, label: providerDisplayName(item) })),
@@ -588,10 +744,21 @@ function OpsDashboard({ data }) {
     ...Array.from(new Map(modelRows.map((item) => [item.model_name, { value: item.model_name, label: modelDisplayName(item) }])).values()),
   ];
   const filteredUsage = usageRows.filter((item) => provider === "all" || item.provider_code === provider);
+  const providerBaseRows = monthRows.filter((item) => provider === "all" || item.provider_code === provider);
+  const providerSeriesDomain = Array.from(
+    new Map(providerBaseRows.map((item) => [item.provider_code, { id: item.provider_code, label: item.provider_label }])).values(),
+  );
   const modelUsage = usageRows.filter((item) => {
     const isModel = ["llm_chat", "llm_vision", "embedding", "speech_to_text"].includes(item.provider_type);
     return isModel && (model === "all" || item.model_name === model);
   });
+  const modelBaseRows = monthRows.filter((item) => {
+    const isModel = ["llm_chat", "llm_vision", "embedding", "speech_to_text"].includes(item.provider_type);
+    return isModel && item.model_name && (model === "all" || item.model_name === model);
+  });
+  const modelSeriesDomain = Array.from(
+    new Map(modelBaseRows.map((item) => [item.model_name, { id: item.model_name, label: item.model_label }])).values(),
+  );
 
   function failureReasonText(item) {
     return [
@@ -622,6 +789,27 @@ function OpsDashboard({ data }) {
         <Stat icon={Cpu} label="模型配置" value={formatNumber(overview.activeModels)} sub="LLM / Vision / Embedding" tone="amber" />
       </section>
 
+      <section className="chart-time-toolbar">
+        <div className="chart-time-meta">
+          <strong>曲线时间窗口</strong>
+          <span>
+            {activeMonth ? monthLabel(activeMonth) : "暂无月份"} · {formatShortDate(windowStart)} - {formatShortDate(windowEnd)} · 最长近30天
+          </span>
+        </div>
+        <div className="header-actions">
+          <SelectControl value={chartMonth} onChange={setChartMonth} options={chartMonthOptions} label="月份" />
+          <SegmentedControl
+            value={range}
+            onChange={setRange}
+            options={[
+              { value: "hourly", label: "时" },
+              { value: "daily", label: "日" },
+              { value: "weekly", label: "周" },
+            ]}
+          />
+        </div>
+      </section>
+
       <section className="ops-grid">
         <section className="panel ops-chart">
           <SectionHeader
@@ -630,15 +818,6 @@ function OpsDashboard({ data }) {
             action={
               <div className="header-actions">
                 <SelectControl value={provider} onChange={setProvider} options={providerOptions} label="API" />
-                <SegmentedControl
-                  value={range}
-                  onChange={setRange}
-                  options={[
-                    { value: "hourly", label: "时" },
-                    { value: "daily", label: "日" },
-                    { value: "weekly", label: "周" },
-                  ]}
-                />
               </div>
             }
           />
@@ -646,7 +825,9 @@ function OpsDashboard({ data }) {
             rows={filteredUsage}
             seriesKey="provider_code"
             seriesLabelKey="provider_label"
-            bucketLabel={range === "hourly" ? "小时" : range === "daily" ? "日期" : "周"}
+            seriesDomain={providerSeriesDomain}
+            bucketDomain={bucketDomain}
+            bucketLabel={rangeLabel}
             yLabel="调用次数"
           />
         </section>
@@ -661,11 +842,15 @@ function OpsDashboard({ data }) {
             rows={modelUsage}
             seriesKey="model_name"
             seriesLabelKey="model_label"
-            bucketLabel={range === "hourly" ? "小时" : range === "daily" ? "日期" : "周"}
+            seriesDomain={modelSeriesDomain}
+            bucketDomain={bucketDomain}
+            bucketLabel={rangeLabel}
             yLabel="调用次数"
           />
         </section>
       </section>
+
+      <TimeWindowSlider days={visibleDays} onChange={setVisibleDays} startDate={windowStart} endDate={windowEnd} />
 
       <section className="ops-grid ops-grid-uneven">
         <section className="panel">

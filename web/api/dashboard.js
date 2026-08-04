@@ -415,7 +415,7 @@ module.exports = async function handler(req, res) {
         FROM public.geo_ops_api_usage_hourly u
         JOIN public.geo_ops_api_registry r ON r.provider_code = u.provider_code
         LEFT JOIN public.geo_ops_model_configs m ON m.model_config_id = u.model_config_id
-        WHERE u.bucket_start >= now() - interval '72 hours'
+        WHERE u.bucket_start >= now() - interval '30 days'
         ORDER BY u.bucket_start, u.provider_code, u.operation
         `,
       ),
