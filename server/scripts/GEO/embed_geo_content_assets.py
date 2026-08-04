@@ -36,7 +36,7 @@ def parse_args():
     parser.add_argument("--note-id", action="append", default=[], help="Only embed selected note_id.")
     parser.add_argument("--limit", type=int, default=50)
     parser.add_argument("--force", action="store_true", help="Re-embed even if vector exists.")
-    parser.add_argument("--only-missing", action="store_true", help="Only embed assets without vector. Default unless --force.")
+    parser.add_argument("--only-missing", action="store_true", help="Only embed assets without a current vector. Default unless --force.")
     parser.add_argument("--watch", action="store_true", help="Continuously listen for asset changes and embed.")
     parser.add_argument("--poll-interval", type=int, default=60, help="Seconds between fallback polling in watch mode.")
     parser.add_argument("--listen-channel", default=DEFAULT_LISTEN_CHANNEL)
@@ -181,7 +181,18 @@ def fetch_assets(conn, args, specific_asset_ids=None):
         where_parts.append(sql.SQL("a.note_id = ANY(%(note_ids)s)"))
         params["note_ids"] = args.note_id
     if args.only_missing:
-        where_parts.append(sql.SQL("v.asset_id IS NULL"))
+        where_parts.append(
+            sql.SQL(
+                """(
+                  v.asset_id IS NULL
+                  OR v.embedding_model IS DISTINCT FROM %(embedding_model)s
+                  OR v.updated_at < a.updated_at
+                  OR v.combined_text IS DISTINCT FROM left(a.asset_text, %(max_text_chars)s)
+                )"""
+            )
+        )
+        params["embedding_model"] = args.embedding_model
+        params["max_text_chars"] = args.max_text_chars
     limit_sql = sql.SQL("")
     if args.limit and not specific_asset_ids:
         limit_sql = sql.SQL("LIMIT %(limit)s")
@@ -337,10 +348,7 @@ def watch_loop(args):
                     except ValueError:
                         pass
             if specific_ids:
-                previous_only_missing = args.only_missing
-                args.only_missing = False
                 ok, fail = embed_assets(conn, args, specific_asset_ids=specific_ids)
-                args.only_missing = previous_only_missing
                 print(f"notify_embed ok={ok} failed={fail}", flush=True)
             else:
                 ok, fail = embed_assets(conn, args)

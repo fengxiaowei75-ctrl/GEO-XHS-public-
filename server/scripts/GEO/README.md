@@ -21,17 +21,19 @@
 - `sync_xhs_note_by_id.py`: 手工按 note_id 或笔记链接补录。可选抓详情、分析图片、构建内容资产、写入资产向量。
 - `build_geo_content_assets.py`: 聚合同一笔记的详情和图片解析，计算互动权重与时效权重，调用豆包/Ark 内容模型写入笔记级内容资产表。
 - `embed_geo_content_assets.py`: 将 `geo_note_content_assets.asset_text` 转为 pgvector；支持一次性补量和 `--watch` 持续监听资产更新。
-- `watch_geo_note_ingest_queue.py`: 常驻队列 worker。处理 `geo_note_ingest_queue` 中的新 note_id，自动抓详情、分析图片、构建内容资产并刷新向量。
+- `watch_geo_note_ingest_queue.py`: 常驻队列 worker。处理 `geo_note_ingest_queue` 中的新 note_id，自动抓详情、分析图片、构建内容资产；默认由 `xhs-geo-asset-vector.service` 监听资产更新并刷新向量。
 
 ## 常用入口
 
 ```bash
 python /opt/xhs-sync/scripts/GEO/sync_xhs_note_by_id.py --note-id <note_id>
-python /opt/xhs-sync/scripts/GEO/sync_xhs_note_by_id.py --note-id <note_id> --build-asset --embed-asset
+python /opt/xhs-sync/scripts/GEO/sync_xhs_note_by_id.py --note-id <note_id> --build-asset
 python /opt/xhs-sync/scripts/GEO/build_geo_content_assets.py --min-fresh-score 300 --limit 10
 python /opt/xhs-sync/scripts/GEO/embed_geo_content_assets.py --only-missing --limit 50
 python /opt/xhs-sync/scripts/GEO/embed_geo_content_assets.py --watch --poll-interval 60
 ```
+
+`--embed-asset` 只用于没有运行向量 watcher 的一次性手工补量；队列 worker 默认不在子进程里执行 embedding，避免和 watcher 重复调用同一资产。
 
 ## 自动化队列
 

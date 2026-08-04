@@ -384,7 +384,13 @@ module.exports = async function handler(req, res) {
           l.status,
           l.http_status,
           l.note_id,
-          COALESCE(NULLIF(n.title, ''), NULLIF(a.title, ''), NULLIF(n.source_title, ''), '') AS note_title,
+          COALESCE(
+            NULLIF(n.title, ''),
+            NULLIF(a.title, ''),
+            NULLIF(n.source_title, ''),
+            NULLIF(left(trim(regexp_replace(COALESCE(n.content, a.content, n.source_content, ''), '[[:space:]]+', ' ', 'g')), 80), ''),
+            ''
+          ) AS note_title,
           COALESCE(m.model_name, '') AS model_name,
           l.started_at,
           l.latency_ms,

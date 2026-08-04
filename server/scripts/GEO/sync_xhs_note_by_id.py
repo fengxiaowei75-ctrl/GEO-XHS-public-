@@ -156,6 +156,26 @@ WHERE detail_status = 'success'
         return {row[0] for row in cur.fetchall()}
 
 
+def processable_note_ids(conn, table_name, note_ids):
+    if not note_ids:
+        return []
+    schema_name, plain_table_name = detail_pipeline.split_table_name(table_name)
+    query = detail_pipeline.sql.SQL(
+        """
+SELECT note_id
+FROM {table}
+WHERE detail_status = 'success'
+  AND COALESCE(is_show, true) = true
+  AND COALESCE(NULLIF(trim(title), ''), NULLIF(trim(content), '')) IS NOT NULL
+  AND note_id = ANY(%s)
+"""
+    ).format(table=detail_pipeline.sql.Identifier(schema_name, plain_table_name))
+    with conn.cursor() as cur:
+        cur.execute(query, (note_ids,))
+        rows = {row[0] for row in cur.fetchall()}
+    return [note_id for note_id in note_ids if note_id in rows]
+
+
 def db_password_from_env(args):
     values = detail_pipeline.load_env_file()
     return args.db_password or os.environ.get("PGPASSWORD") or values.get("PGPASSWORD") or ""
@@ -359,6 +379,7 @@ def main():
             print("details_fetch_skipped=all_existing_success")
         detail_success = sum(1 for item in details.values() if item["detail_status"] == "success")
         detail_failed = sum(1 for item in details.values() if item["detail_status"] != "success")
+        eligible_note_ids = note_ids
         print(
             f"details_existing_success_skipped={detail_skipped_existing} "
             f"details_fetch_needed={len(fetch_source_rows)}"
@@ -393,21 +414,27 @@ def main():
         if fetch_source_rows:
             detail_written = detail_pipeline.upsert_rows(conn, args.detail_table, fetch_source_rows, details)
         print(f"details_written={detail_written} success={detail_success} failed={detail_failed}")
+        eligible_note_ids = processable_note_ids(conn, args.detail_table, note_ids)
+        detail_quality_skipped = len(note_ids) - len(eligible_note_ids) - detail_failed
+        if detail_quality_skipped > 0:
+            print(f"details_quality_skipped={detail_quality_skipped}")
 
-        if not args.skip_images:
-            image_args = build_image_args(args, note_ids, detail_args.db_password)
+        if eligible_note_ids and not args.skip_images:
+            image_args = build_image_args(args, eligible_note_ids, detail_args.db_password)
             image_pipeline.ensure_target_table(conn, args.image_table)
             image_rows = image_pipeline.fetch_image_workload(conn, image_args)
             image_count = len(image_rows)
             print(f"images_to_process={image_count}")
             if image_rows:
                 image_results, image_written = image_pipeline.analyze_images_and_upsert(conn, image_args, image_rows)
+        elif not eligible_note_ids:
+            print("downstream_skipped=no_processable_success_details")
 
-        if args.build_asset:
-            asset_ids, asset_failed = build_assets(conn, args, note_ids, detail_args.db_password)
+        if eligible_note_ids and args.build_asset:
+            asset_ids, asset_failed = build_assets(conn, args, eligible_note_ids, detail_args.db_password)
 
-        if args.embed_asset:
-            vector_ok, vector_failed = embed_assets(conn, args, note_ids, detail_args.db_password, force=args.force_embedding)
+        if eligible_note_ids and args.embed_asset:
+            vector_ok, vector_failed = embed_assets(conn, args, eligible_note_ids, detail_args.db_password, force=args.force_embedding)
     except Exception as exc:
         ops.finish_script_run(
             script_run_id,

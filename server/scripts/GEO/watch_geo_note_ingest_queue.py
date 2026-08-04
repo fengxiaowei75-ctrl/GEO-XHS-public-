@@ -62,6 +62,11 @@ def parse_args():
     parser.add_argument("--force-images", action="store_true")
     parser.add_argument("--force-asset", action="store_true")
     parser.add_argument("--force-embedding", action="store_true")
+    parser.add_argument(
+        "--embed-in-child",
+        action="store_true",
+        help="Run embedding inside each queue child process. Default relies on the asset-vector watcher.",
+    )
     parser.add_argument("--db-host", default="localhost")
     parser.add_argument("--db-port", default="5432")
     parser.add_argument("--db-name", default="xhs_geo")
@@ -384,7 +389,6 @@ def build_child_command(args, job):
         "--source-keyword",
         normalize_source_keyword(job.get("source_keyword"), args.source_keyword_prefix),
         "--build-asset",
-        "--embed-asset",
         "--timeout",
         str(args.child_timeout),
         "--retries",
@@ -404,7 +408,9 @@ def build_child_command(args, job):
         command.append("--force-images")
     if args.force_asset:
         command.append("--force-asset")
-    if args.force_embedding:
+    if args.embed_in_child:
+        command.append("--embed-asset")
+    if args.embed_in_child and args.force_embedding:
         command.append("--force-embedding")
     return command
 

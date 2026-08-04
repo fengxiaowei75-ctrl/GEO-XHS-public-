@@ -1591,7 +1591,7 @@ function OpsDashboard({ data, apiDate, onApiDateChange }) {
                       <StatusPill tone={statusTone(item.status)}>{item.status}</StatusPill>
                     </td>
                     <td>
-                      <div className="note-title">{item.note_title || "无标题/未抓到详情"}</div>
+                      <div className="note-title">{item.note_title || item.note_id || "未抓到详情"}</div>
                       <div className="note-meta">{item.note_id || "-"}</div>
                     </td>
                     <td>{item.model_name || "-"}</td>

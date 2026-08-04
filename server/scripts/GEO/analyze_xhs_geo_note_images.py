@@ -347,7 +347,11 @@ def collect_images_for_note(row):
 
 def fetch_image_workload(conn, args):
     source_schema, source_name = split_table_name(args.source_table)
-    where_parts = [sql.SQL("detail_status = 'success'")]
+    where_parts = [
+        sql.SQL("detail_status = 'success'"),
+        sql.SQL("COALESCE(is_show, true) = true"),
+        sql.SQL("COALESCE(NULLIF(trim(title), ''), NULLIF(trim(content), '')) IS NOT NULL"),
+    ]
     params = []
     if args.note_id:
         where_parts.append(sql.SQL("note_id = ANY(%s)"))

@@ -133,7 +133,13 @@ module.exports = async function handler(req, res) {
         v.asset_id,
         v.note_id,
         v.combined_text,
-        a.title,
+        COALESCE(
+          NULLIF(a.title, ''),
+          NULLIF(n.title, ''),
+          NULLIF(n.source_title, ''),
+          NULLIF(left(trim(regexp_replace(COALESCE(a.content, n.content, n.source_content, ''), '[[:space:]]+', ' ', 'g')), 80), ''),
+          v.note_id
+        ) AS title,
         a.author_nickname,
         a.explosion_level,
         a.fresh_hot_score,
@@ -144,6 +150,7 @@ module.exports = async function handler(req, res) {
         v.content_vector <=> $1::halfvec AS distance
       FROM public.geo_note_content_asset_vectors v
       LEFT JOIN public.geo_note_content_assets a ON v.asset_id = a.asset_id
+      LEFT JOIN public.note_details n ON n.note_id = v.note_id
       ORDER BY v.content_vector <=> $1::halfvec
       LIMIT $2
     `;

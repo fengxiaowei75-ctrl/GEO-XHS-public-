@@ -471,7 +471,11 @@ def fetch_candidate_notes(conn, args):
     asset_schema, asset_name = split_table_name(args.asset_table)
     order_column = sql.Identifier("fresh_hot_score" if args.rank_mode == "fresh" else "interaction_score")
 
-    where_parts = [sql.SQL("r.detail_status = 'success'")]
+    where_parts = [
+        sql.SQL("r.detail_status = 'success'"),
+        sql.SQL("COALESCE(r.is_show, true) = true"),
+        sql.SQL("COALESCE(NULLIF(trim(r.title), ''), NULLIF(trim(r.content), '')) IS NOT NULL"),
+    ]
     params = {
         "half_life": args.freshness_half_life_days,
         "prompt_version": args.prompt_version,
@@ -505,6 +509,8 @@ WITH scored AS (
       * POWER(0.5, GREATEST(0, CURRENT_DATE - n.publish_time::date)::numeric / %(half_life)s::numeric)) AS fresh_hot_score
   FROM {detail_table} n
   WHERE n.detail_status = 'success'
+    AND COALESCE(n.is_show, true) = true
+    AND COALESCE(NULLIF(trim(n.title), ''), NULLIF(trim(n.content), '')) IS NOT NULL
 ),
 ranked AS (
   SELECT
@@ -561,6 +567,7 @@ SELECT
   color_palette, information_density, image2_style_prompt, risk_flags, confidence
 FROM {image_table}
 WHERE note_id = %s
+  AND status = 'success'
 ORDER BY image_index, id
 LIMIT %s
 """
