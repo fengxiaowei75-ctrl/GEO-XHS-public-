@@ -43,6 +43,7 @@ def parse_args():
     parser.add_argument("--vector-table", default=DEFAULT_VECTOR_TABLE)
     parser.add_argument("--source-keyword", default="manual_note_id")
     parser.add_argument("--skip-images", action="store_true", help="Only fetch/upsert note details.")
+    parser.add_argument("--force-detail", action="store_true", help="Re-fetch note detail even if note_details already has success.")
     parser.add_argument("--force-images", action="store_true", help="Re-analyze images even if already completed.")
     parser.add_argument("--max-images", type=int, default=0, help="Limit image analysis count.")
     parser.add_argument("--build-asset", action="store_true", help="Build note-level GEO content asset after image analysis.")
@@ -136,6 +137,23 @@ def make_source_rows(note_ids, source_keyword):
             "source_raw_json": {"source": "manual_note_id", "note_id": note_id},
         })
     return rows
+
+
+def existing_success_note_ids(conn, table_name, note_ids):
+    if not note_ids:
+        return set()
+    schema_name, plain_table_name = detail_pipeline.split_table_name(table_name)
+    query = detail_pipeline.sql.SQL(
+        """
+SELECT note_id
+FROM {table}
+WHERE detail_status = 'success'
+  AND note_id = ANY(%s)
+"""
+    ).format(table=detail_pipeline.sql.Identifier(schema_name, plain_table_name))
+    with conn.cursor() as cur:
+        cur.execute(query, (note_ids,))
+        return {row[0] for row in cur.fetchall()}
 
 
 def db_password_from_env(args):
@@ -308,6 +326,7 @@ def main():
     print(f"note_ids={len(note_ids)}")
     details = {}
     detail_success = detail_failed = 0
+    detail_skipped_existing = 0
     image_results = []
     image_written = 0
     image_count = 0
@@ -317,9 +336,33 @@ def main():
     vector_failed = 0
     conn = None
     try:
-        details = detail_pipeline.fetch_details(detail_args, source_rows)
+        fetch_source_rows = source_rows
+        if not args.dry_run:
+            conn = detail_pipeline.db_connect(detail_args)
+            detail_pipeline.ensure_table(conn, args.detail_table)
+            if not args.force_detail:
+                existing_success = existing_success_note_ids(conn, args.detail_table, note_ids)
+                fetch_source_rows = [row for row in source_rows if row["note_id"] not in existing_success]
+                detail_skipped_existing = len(existing_success)
+                for note_id in existing_success:
+                    details[note_id] = {
+                        "note_id": note_id,
+                        "detail_status": "success",
+                        "detail_error": None,
+                        "payload": None,
+                        "data": {},
+                        "skipped_existing": True,
+                    }
+        if fetch_source_rows:
+            details.update(detail_pipeline.fetch_details(detail_args, fetch_source_rows))
+        else:
+            print("details_fetch_skipped=all_existing_success")
         detail_success = sum(1 for item in details.values() if item["detail_status"] == "success")
         detail_failed = sum(1 for item in details.values() if item["detail_status"] != "success")
+        print(
+            f"details_existing_success_skipped={detail_skipped_existing} "
+            f"details_fetch_needed={len(fetch_source_rows)}"
+        )
 
         if args.dry_run:
             print(json.dumps({
@@ -330,6 +373,7 @@ def main():
                 "note_ids": note_ids,
                 "detail_success": detail_success,
                 "detail_failed": detail_failed,
+                "detail_skipped_existing": detail_skipped_existing,
                 "skip_images": args.skip_images,
                 "build_asset": args.build_asset,
                 "embed_asset": args.embed_asset,
@@ -340,14 +384,14 @@ def main():
                 processed_count=len(note_ids),
                 success_count=detail_success,
                 failed_count=detail_failed,
-                skipped_count=len(note_ids),
+                skipped_count=detail_skipped_existing,
                 summary={"dry_run": True},
             )
             return
 
-        conn = detail_pipeline.db_connect(detail_args)
-        detail_pipeline.ensure_table(conn, args.detail_table)
-        detail_written = detail_pipeline.upsert_rows(conn, args.detail_table, source_rows, details)
+        detail_written = 0
+        if fetch_source_rows:
+            detail_written = detail_pipeline.upsert_rows(conn, args.detail_table, fetch_source_rows, details)
         print(f"details_written={detail_written} success={detail_success} failed={detail_failed}")
 
         if not args.skip_images:
@@ -372,6 +416,7 @@ def main():
             processed_count=len(note_ids),
             success_count=detail_success + sum(1 for item in image_results if item.get("status") == "success") + len([item for item in asset_ids if item is not None]) + vector_ok,
             failed_count=detail_failed + sum(1 for item in image_results if item.get("status") == "failed") + asset_failed + vector_failed,
+            skipped_count=detail_skipped_existing,
             error_message=str(exc),
             summary=ops.exception_summary(exc),
         )
@@ -388,6 +433,7 @@ def main():
         "note_count": len(note_ids),
         "detail_success": detail_success,
         "detail_failed": detail_failed,
+        "detail_skipped_existing": detail_skipped_existing,
         "images_to_process": image_count,
         "image_success": sum(1 for item in image_results if item["status"] == "success"),
         "image_failed": sum(1 for item in image_results if item["status"] == "failed"),
@@ -403,9 +449,11 @@ def main():
         processed_count=len(note_ids),
         success_count=detail_success + sum(1 for item in image_results if item["status"] == "success") + len([item for item in asset_ids if item is not None]) + vector_ok,
         failed_count=detail_failed + sum(1 for item in image_results if item["status"] == "failed") + asset_failed + vector_failed,
+        skipped_count=detail_skipped_existing,
         summary={
             "detail_success": detail_success,
             "detail_failed": detail_failed,
+            "detail_skipped_existing": detail_skipped_existing,
             "images_to_process": image_count,
             "image_written": image_written,
             "asset_written": len([item for item in asset_ids if item is not None]),
