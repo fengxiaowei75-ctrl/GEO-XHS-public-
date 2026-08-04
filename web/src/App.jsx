@@ -22,6 +22,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { ChatWidget } from "./components/ChatWidget";
 import { sampleDashboard } from "./sampleData.js";
 
 const numberFormatter = new Intl.NumberFormat("zh-CN");
@@ -1397,70 +1398,73 @@ export default function App() {
   const activeTitle = navItems.find((item) => item.id === activeView)?.label || "内容资产";
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand-block">
-          <div className="brand-icon">
-            <Sparkles size={18} />
-          </div>
-          <div>
-            <strong>GEO XHS</strong>
-            <span>Intelligence</span>
-          </div>
-        </div>
-        <nav>
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button key={item.id} className={activeView === item.id ? "active" : ""} onClick={() => setActiveView(item.id)} type="button">
-                <Icon size={17} />
-                {item.label}
-              </button>
-            );
-          })}
-        </nav>
-      </aside>
-
-      <main>
-        <header className="topbar">
-          <div>
-            <div className="eyebrow">
-              <Sparkles size={15} />
-              GEO XHS Intelligence
+    <>
+      <div className="app-shell">
+        <aside className="sidebar">
+          <div className="brand-block">
+            <div className="brand-icon">
+              <Sparkles size={18} />
             </div>
-            <h1>{activeTitle}</h1>
+            <div>
+              <strong>GEO XHS</strong>
+              <span>Intelligence</span>
+            </div>
           </div>
-          <div className="toolbar">
-            {activeView === "content" ? (
-              <div className="search-box">
-                <Search size={16} />
-                <input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="搜索标题、人群、行业、痛点" />
+          <nav>
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button key={item.id} className={activeView === item.id ? "active" : ""} onClick={() => setActiveView(item.id)} type="button">
+                  <Icon size={17} />
+                  {item.label}
+                </button>
+              );
+            })}
+          </nav>
+        </aside>
+
+        <main>
+          <header className="topbar">
+            <div>
+              <div className="eyebrow">
+                <Sparkles size={15} />
+                GEO XHS Intelligence
               </div>
-            ) : null}
-            <button className="icon-button" onClick={loadDashboard} disabled={loading} title="刷新数据" type="button">
-              <RefreshCcw size={17} />
-            </button>
-          </div>
-        </header>
+              <h1>{activeTitle}</h1>
+            </div>
+            <div className="toolbar">
+              {activeView === "content" ? (
+                <div className="search-box">
+                  <Search size={16} />
+                  <input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="搜索标题、人群、行业、痛点" />
+                </div>
+              ) : null}
+              <button className="icon-button" onClick={loadDashboard} disabled={loading} title="刷新数据" type="button">
+                <RefreshCcw size={17} />
+              </button>
+            </div>
+          </header>
 
-        {isSample ? (
-          <div className="notice">
-            <AlertTriangle size={16} />
-            当前为样例数据。部署到 Vercel 后配置 PostgreSQL 环境变量即可读取真实库。
-          </div>
-        ) : null}
+          {isSample ? (
+            <div className="notice">
+              <AlertTriangle size={16} />
+              当前为样例数据。部署到 Vercel 后配置 PostgreSQL 环境变量即可读取真实库。
+            </div>
+          ) : null}
 
-        {error ? (
-          <div className="notice notice-error">
-            <AlertTriangle size={16} />
-            {error}
-          </div>
-        ) : null}
+          {error ? (
+            <div className="notice notice-error">
+              <AlertTriangle size={16} />
+              {error}
+            </div>
+          ) : null}
 
-        {activeView === "content" ? <ContentDashboard data={data} loading={loading} filter={filter} /> : null}
-        {activeView === "ops" ? <OpsDashboard data={data} /> : null}
-        {activeView === "models" ? <ModelConfigView data={data} /> : null}
-      </main>
-    </div>
+          {activeView === "content" ? <ContentDashboard data={data} loading={loading} filter={filter} /> : null}
+          {activeView === "ops" ? <OpsDashboard data={data} /> : null}
+          {activeView === "models" ? <ModelConfigView data={data} /> : null}
+        </main>
+      </div>
+      <ChatWidget />
+    </>
   );
 }
