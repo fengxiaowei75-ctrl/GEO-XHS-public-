@@ -290,7 +290,8 @@ def request_note_detail(args, note_id):
             payload = response.json()
             code = payload.get("Code")
             if code not in (0, 200, "0", "200", None):
-                error_message = f"Code={code} Msg={payload.get('Msg')}"
+                message = str(payload.get("Msg") or "")
+                error_message = f"Code={code} Msg={message}"
                 ops.record_api_call(
                     provider_code="endata_xhs_note_detail",
                     operation="note_detail_fetch",
@@ -309,6 +310,10 @@ def request_note_detail(args, note_id):
                     error_message=error_message,
                     metadata={"source": "note_details", "business_code": code, "business_status": "failed"},
                 )
+                last_error = RuntimeError(error_message)
+                if ("请求失败" in message or "重试" in message) and attempt < args.retries:
+                    time.sleep(args.retry_sleep * (attempt + 1))
+                    continue
                 return {
                     "note_id": note_id,
                     "detail_status": "failed",
