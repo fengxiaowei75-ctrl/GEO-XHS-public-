@@ -546,7 +546,7 @@ function OpsDashboard({ data }) {
                 <div>
                   <strong>{item.display_name_cn || item.provider_code}</strong>
                   <span>
-                    {providerTypeLabel(item.provider_type)} · {item.billing_unit || "call"}
+                    {providerTypeLabel(item.provider_type)} · {item.billing_unit || "call"} · 涉及笔记 {formatNumber(item.notes_total)}
                   </span>
                 </div>
                 <div className="ops-metrics">
@@ -571,7 +571,7 @@ function OpsDashboard({ data }) {
                     }}
                     type="button"
                   >
-                    失败 {formatNumber(item.calls_failed)}
+                    业务/接口失败 {formatNumber(item.calls_failed)}
                   </button>
                   <small>{formatCompact(item.total_tokens)} tokens</small>
                 </div>

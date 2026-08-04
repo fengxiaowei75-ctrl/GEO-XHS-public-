@@ -6,7 +6,7 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 from zipfile import ZipFile
@@ -257,32 +257,83 @@ def request_note_detail(args, note_id):
     params = {"XhsId": note_id, "Token": args.endata_token}
     last_error = None
     for attempt in range(args.retries + 1):
+        started_at = datetime.now(timezone.utc)
+        started_mono = time.monotonic()
+        response = None
         try:
-            response = ops.call_api(
-                "GET",
+            response = requests.get(
                 url,
-                provider_code="endata_xhs_note_detail",
-                operation="note_detail_fetch",
-                note_id=note_id,
-                attempt_no=attempt + 1,
-                max_attempts=args.retries + 1,
-                metadata={"source": "note_details"},
                 params=params,
                 timeout=args.timeout,
             )
+            latency_ms = int((time.monotonic() - started_mono) * 1000)
             if response.status_code >= 400:
+                ops.record_api_call(
+                    provider_code="endata_xhs_note_detail",
+                    operation="note_detail_fetch",
+                    method="GET",
+                    url=url,
+                    status="failed",
+                    started_at=started_at,
+                    finished_at=datetime.now(timezone.utc),
+                    latency_ms=latency_ms,
+                    http_status=response.status_code,
+                    attempt_no=attempt + 1,
+                    max_attempts=args.retries + 1,
+                    note_id=note_id,
+                    response_bytes=len(response.content or b""),
+                    error_code=f"http_{response.status_code}",
+                    error_message=response.text[:500],
+                    metadata={"source": "note_details", "business_status": "http_failed"},
+                )
                 raise RuntimeError(f"HTTP {response.status_code}: {response.text[:500]}")
             payload = response.json()
             code = payload.get("Code")
             if code not in (0, 200, "0", "200", None):
+                error_message = f"Code={code} Msg={payload.get('Msg')}"
+                ops.record_api_call(
+                    provider_code="endata_xhs_note_detail",
+                    operation="note_detail_fetch",
+                    method="GET",
+                    url=url,
+                    status="failed",
+                    started_at=started_at,
+                    finished_at=datetime.now(timezone.utc),
+                    latency_ms=latency_ms,
+                    http_status=response.status_code,
+                    attempt_no=attempt + 1,
+                    max_attempts=args.retries + 1,
+                    note_id=note_id,
+                    response_bytes=len(response.content or b""),
+                    error_code="endata_business_code",
+                    error_message=error_message,
+                    raw_usage={},
+                    metadata={"source": "note_details", "business_code": code, "business_status": "failed"},
+                )
                 return {
                     "note_id": note_id,
                     "detail_status": "failed",
-                    "detail_error": f"Code={code} Msg={payload.get('Msg')}",
+                    "detail_error": error_message,
                     "payload": payload,
                     "data": {},
                 }
             data = payload.get("Data") or {}
+            ops.record_api_call(
+                provider_code="endata_xhs_note_detail",
+                operation="note_detail_fetch",
+                method="GET",
+                url=url,
+                status="success",
+                started_at=started_at,
+                finished_at=datetime.now(timezone.utc),
+                latency_ms=latency_ms,
+                http_status=response.status_code,
+                attempt_no=attempt + 1,
+                max_attempts=args.retries + 1,
+                note_id=note_id,
+                response_bytes=len(response.content or b""),
+                metadata={"source": "note_details", "business_status": "success"},
+            )
             return {
                 "note_id": note_id,
                 "detail_status": "success",
@@ -292,6 +343,24 @@ def request_note_detail(args, note_id):
             }
         except Exception as exc:
             last_error = exc
+            if response is None:
+                status = "timeout" if isinstance(exc, requests.Timeout) else "failed"
+                ops.record_api_call(
+                    provider_code="endata_xhs_note_detail",
+                    operation="note_detail_fetch",
+                    method="GET",
+                    url=url,
+                    status=status,
+                    started_at=started_at,
+                    finished_at=datetime.now(timezone.utc),
+                    latency_ms=int((time.monotonic() - started_mono) * 1000),
+                    attempt_no=attempt + 1,
+                    max_attempts=args.retries + 1,
+                    note_id=note_id,
+                    error_code=exc.__class__.__name__,
+                    error_message=str(exc),
+                    metadata={"source": "note_details", "business_status": "request_exception"},
+                )
             if attempt >= args.retries:
                 break
             time.sleep(args.retry_sleep * (attempt + 1))

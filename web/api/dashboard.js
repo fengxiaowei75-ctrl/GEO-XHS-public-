@@ -382,6 +382,9 @@ module.exports = async function handler(req, res) {
           count(*)::int AS calls_total,
           count(*) FILTER (WHERE l.status = 'success')::int AS calls_success,
           count(*) FILTER (WHERE l.status <> 'success')::int AS calls_failed,
+          count(DISTINCT l.note_id) FILTER (WHERE l.note_id IS NOT NULL)::int AS notes_total,
+          count(DISTINCT l.note_id) FILTER (WHERE l.note_id IS NOT NULL AND l.status = 'success')::int AS notes_success,
+          count(DISTINCT l.note_id) FILTER (WHERE l.note_id IS NOT NULL AND l.status <> 'success')::int AS notes_failed,
           COALESCE(sum(l.total_tokens), 0)::bigint AS total_tokens,
           round(avg(l.latency_ms)::numeric, 1)::float AS avg_latency_ms,
           max(l.started_at) AS latest_started_at
