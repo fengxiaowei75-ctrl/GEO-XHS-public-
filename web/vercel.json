@@ -6,9 +6,6 @@
     "api/chat.js": {
       "maxDuration": 60
     },
-    "api/content-cluster.js": {
-      "maxDuration": 60
-    },
     "api/dashboard.js": {
       "maxDuration": 30
     },
