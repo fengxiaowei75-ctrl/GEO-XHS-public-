@@ -481,8 +481,10 @@ module.exports = async function handler(req, res) {
       scriptEvents,
       endataLatestSnapshots,
       endataEndpointDetails,
-      endataEndpointHistory,
+      endataEndpointHistoryHourly,
+      endataEndpointHistoryDaily,
       endataScriptUsageHourly,
+      endataScriptUsageDaily,
       modelConfigs,
       credentials,
       rateLimitRules,
@@ -1198,36 +1200,78 @@ module.exports = async function handler(req, res) {
       query(
         client,
         `
-        WITH latest_period AS (
-          SELECT begin_code, end_code
-          FROM public.endata_visit_stat_snapshots
-          WHERE range_key = 'today' AND url_filter = '' AND ok = true
-          ORDER BY sampled_at DESC
-          LIMIT 1
-        ),
-        recent_snapshots AS (
-          SELECT s.snapshot_id, s.sampled_at
+        WITH hourly_snapshots AS (
+          SELECT
+            s.snapshot_id,
+            s.begin_code,
+            s.end_code,
+            to_char(to_date(s.begin_code, 'YYYYMMDD'), 'YYYY-MM-DD') AS period_key,
+            to_char(date_trunc('hour', s.sampled_at AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD"T"HH24:MI:SS') AS bucket_start,
+            row_number() OVER (
+              PARTITION BY s.begin_code, s.end_code, date_trunc('hour', s.sampled_at AT TIME ZONE 'Asia/Shanghai')
+              ORDER BY s.sampled_at DESC
+            ) AS rn
           FROM public.endata_visit_stat_snapshots s
-          JOIN latest_period p ON p.begin_code = s.begin_code AND p.end_code = s.end_code
-          WHERE s.range_key = 'today' AND s.url_filter = '' AND s.ok = true
-          ORDER BY s.sampled_at DESC
-          LIMIT 72
+          WHERE s.range_key = 'today'
+            AND s.url_filter = ''
+            AND s.ok = true
+            AND s.begin_code = s.end_code
+            AND s.sampled_at >= now() - interval '45 days'
         )
         SELECT
-          rs.sampled_at AS bucket_start,
+          hs.period_key,
+          hs.bucket_start,
+          hs.begin_code,
+          hs.end_code,
           d.url,
           d.count,
           d.share_pct::float AS share_pct
-        FROM recent_snapshots rs
-        JOIN public.endata_visit_stat_details d ON d.snapshot_id = rs.snapshot_id
-        ORDER BY rs.sampled_at, d.url
+        FROM hourly_snapshots hs
+        JOIN public.endata_visit_stat_details d ON d.snapshot_id = hs.snapshot_id
+        WHERE hs.rn = 1
+        ORDER BY hs.period_key, hs.bucket_start, d.url
+        `,
+      ),
+      query(
+        client,
+        `
+        WITH daily_snapshots AS (
+          SELECT
+            s.snapshot_id,
+            s.begin_code,
+            s.end_code,
+            to_char(to_date(s.begin_code, 'YYYYMMDD'), 'YYYY-MM') AS period_key,
+            to_char(to_date(s.end_code, 'YYYYMMDD'), 'YYYY-MM-DD"T"00:00:00') AS bucket_start,
+            row_number() OVER (
+              PARTITION BY s.begin_code, s.end_code
+              ORDER BY s.sampled_at DESC
+            ) AS rn
+          FROM public.endata_visit_stat_snapshots s
+          WHERE s.range_key = 'month'
+            AND s.url_filter = ''
+            AND s.ok = true
+            AND s.sampled_at >= now() - interval '18 months'
+        )
+        SELECT
+          ds.period_key,
+          ds.bucket_start,
+          ds.begin_code,
+          ds.end_code,
+          d.url,
+          d.count,
+          d.share_pct::float AS share_pct
+        FROM daily_snapshots ds
+        JOIN public.endata_visit_stat_details d ON d.snapshot_id = ds.snapshot_id
+        WHERE ds.rn = 1
+        ORDER BY ds.period_key, ds.bucket_start, d.url
         `,
       ),
       query(
         client,
         `
         SELECT
-          date_trunc('hour', l.started_at) AS bucket_start,
+          to_char(l.started_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') AS period_key,
+          to_char(date_trunc('hour', l.started_at AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD"T"HH24:MI:SS') AS bucket_start,
           COALESCE(l.script_key, 'unknown') AS script_key,
           COALESCE(s.display_name_cn, l.script_key, '未记录脚本') AS display_name_cn,
           CASE
@@ -1255,9 +1299,47 @@ module.exports = async function handler(req, res) {
               '/v2/xhs/getstandardcommentinfo'
             )
           )
-          AND l.started_at >= now() - interval '72 hours'
-        GROUP BY 1, 2, 3, 4, 5
-        ORDER BY bucket_start, calls_total DESC, script_key
+          AND l.started_at >= now() - interval '45 days'
+        GROUP BY 1, 2, 3, 4, 5, 6
+        ORDER BY period_key, bucket_start, calls_total DESC, script_key
+        `,
+      ),
+      query(
+        client,
+        `
+        SELECT
+          to_char(l.started_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM') AS period_key,
+          to_char(date_trunc('day', l.started_at AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD"T"00:00:00') AS bucket_start,
+          COALESCE(l.script_key, 'unknown') AS script_key,
+          COALESCE(s.display_name_cn, l.script_key, '未记录脚本') AS display_name_cn,
+          CASE
+            WHEN lower(COALESCE(l.request_path, '')) IN (
+              '/v2/xhs/getstandardnoteinfo',
+              '/v2/xhs/getstandardusernotelist',
+              '/v2/xhs/getxhsnotelist_gb',
+              '/v2/xhs/getstandardcommentinfo'
+            ) THEN lower(l.request_path)
+            WHEN l.provider_code = 'endata_xhs_note_detail' THEN '/v2/xhs/getstandardnoteinfo'
+            ELSE lower(COALESCE(l.request_path, l.provider_code))
+          END AS url,
+          l.operation,
+          count(*)::int AS calls_total,
+          count(*) FILTER (WHERE l.status = 'success')::int AS calls_success,
+          count(*) FILTER (WHERE l.status <> 'success')::int AS calls_failed
+        FROM public.geo_ops_api_call_logs l
+        LEFT JOIN public.geo_ops_scripts s ON s.script_key = l.script_key
+        WHERE (
+            l.provider_code LIKE 'endata%'
+            OR lower(COALESCE(l.request_path, '')) IN (
+              '/v2/xhs/getstandardnoteinfo',
+              '/v2/xhs/getstandardusernotelist',
+              '/v2/xhs/getxhsnotelist_gb',
+              '/v2/xhs/getstandardcommentinfo'
+            )
+          )
+          AND l.started_at >= now() - interval '18 months'
+        GROUP BY 1, 2, 3, 4, 5, 6
+        ORDER BY period_key, bucket_start, calls_total DESC, script_key
         `,
       ),
       query(
@@ -1319,8 +1401,18 @@ module.exports = async function handler(req, res) {
       ),
     ]);
     const endataEndpoints = endataEndpointDetails.length ? endataEndpointDetails.map(enrichEndataEndpoint) : endataEndpointCatalog;
-    const enrichedEndataHistory = endataEndpointHistory.map(enrichEndataEndpoint);
-    const enrichedEndataScriptUsage = endataScriptUsageHourly.map((row) => {
+    const enrichedEndataHistoryHourly = endataEndpointHistoryHourly.map(enrichEndataEndpoint);
+    const enrichedEndataHistoryDaily = endataEndpointHistoryDaily.map(enrichEndataEndpoint);
+    const enrichedEndataScriptUsageHourly = endataScriptUsageHourly.map((row) => {
+      const endpoint = enrichEndataEndpoint(row);
+      return {
+        ...row,
+        endpoint_display_name_cn: endpoint.display_name_cn,
+        endpoint_description_cn: endpoint.description_cn,
+        endpoint_scripts: endpoint.scripts,
+      };
+    });
+    const enrichedEndataScriptUsageDaily = endataScriptUsageDaily.map((row) => {
       const endpoint = enrichEndataEndpoint(row);
       return {
         ...row,
@@ -1352,8 +1444,11 @@ module.exports = async function handler(req, res) {
         endataBalance: {
           latestSnapshots: endataLatestSnapshots,
           endpoints: endataEndpoints,
-          endpointHistory: enrichedEndataHistory,
-          scriptUsageHourly: enrichedEndataScriptUsage,
+          endpointHistory: enrichedEndataHistoryHourly,
+          endpointHistoryHourly: enrichedEndataHistoryHourly,
+          endpointHistoryDaily: enrichedEndataHistoryDaily,
+          scriptUsageHourly: enrichedEndataScriptUsageHourly,
+          scriptUsageDaily: enrichedEndataScriptUsageDaily,
         },
       });
     }

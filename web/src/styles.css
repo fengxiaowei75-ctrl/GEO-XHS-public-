@@ -727,7 +727,7 @@ tbody tr:hover {
 
 .segmented-control {
   display: inline-grid;
-  grid-template-columns: repeat(3, 42px);
+  grid-template-columns: repeat(var(--segment-count, 3), 42px);
   height: 36px;
   padding: 3px;
   border: 1px solid var(--line);
@@ -2583,6 +2583,30 @@ tbody tr:hover {
   margin-top: 14px;
 }
 
+.endata-panel .section-header {
+  flex-wrap: wrap;
+}
+
+.endata-toolbar {
+  min-width: 0;
+}
+
+.endata-period-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.endata-period-controls .select-control {
+  min-width: 220px;
+}
+
+.endata-period-controls .select-control select {
+  width: min(260px, 34vw);
+  max-width: 260px;
+}
+
 .endata-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2651,6 +2675,10 @@ tbody tr:hover {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-top: 16px;
+}
+
+.endata-script-breakdown > .empty-state {
+  grid-column: 1 / -1;
 }
 
 .endata-script-row {
@@ -2736,6 +2764,13 @@ tbody tr:hover {
 
 .endata-call-metric small {
   margin-top: 5px;
+}
+
+.endata-empty-cell {
+  height: 96px;
+  color: var(--muted);
+  font-weight: 760;
+  text-align: center;
 }
 
 .endpoint-script-tags {
@@ -2984,6 +3019,38 @@ tbody tr:hover {
     min-width: 0;
     max-width: none;
     text-align: left;
+  }
+
+  .endata-toolbar {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .endata-period-controls {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .endata-period-controls .select-control {
+    flex: 1 1 220px;
+    min-width: 0;
+  }
+
+  .endata-period-controls .select-control select {
+    width: 100%;
+    max-width: none;
+  }
+
+  .endata-block-title {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .chart-scale {
+    position: static;
+    margin-top: 8px;
   }
 
   .script-grid {

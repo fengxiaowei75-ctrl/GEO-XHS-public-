@@ -270,6 +270,34 @@ function latestEndataSnapshot(snapshots, rangeKey) {
   })[0];
 }
 
+function endataPeriodLabel(value, mode) {
+  if (!value) return mode === "month" ? "暂无月份" : "暂无日期";
+  return mode === "month" ? monthLabel(value) : value;
+}
+
+function endataPeriodOptions(rows, mode) {
+  const values = Array.from(new Set((rows || []).map((item) => item.period_key).filter(Boolean))).sort((a, b) => b.localeCompare(a));
+  const latest = values[0] || "";
+  return [
+    {
+      value: "latest",
+      label: latest ? `最近${mode === "month" ? "月份" : "日期"}（${endataPeriodLabel(latest, mode)}）` : mode === "month" ? "暂无月份" : "暂无日期",
+    },
+    ...values.map((value) => ({ value, label: endataPeriodLabel(value, mode) })),
+  ];
+}
+
+function activeEndataPeriod(value, options) {
+  if (value && value !== "latest") return value;
+  return options.find((option) => option.value !== "latest")?.value || "";
+}
+
+function latestBucketDate(rows) {
+  const timestamps = (rows || []).map((item) => new Date(item.bucket_start).getTime()).filter((value) => !Number.isNaN(value));
+  if (!timestamps.length) return null;
+  return new Date(Math.max(...timestamps));
+}
+
 function deltaClass(value) {
   const number = Number(value || 0);
   if (number > 0) return "endata-delta-up";
@@ -386,7 +414,7 @@ async function requestJson(path, options = {}) {
 
 function SegmentedControl({ value, onChange, options }) {
   return (
-    <div className="segmented-control">
+    <div className="segmented-control" style={{ "--segment-count": options.length }}>
       {options.map((option) => (
         <button
           key={option.value}
@@ -401,10 +429,11 @@ function SegmentedControl({ value, onChange, options }) {
   );
 }
 
-function formatBucket(value) {
+function formatBucket(value, range = "hourly") {
   if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "-";
+  if (range === "daily" || range === "weekly") return shortDateFormatter.format(date);
   return dateFormatter.format(date);
 }
 
@@ -531,6 +560,7 @@ function LineChart({
   seriesLabelKey = "display_name_cn",
   seriesDomain = [],
   bucketDomain = [],
+  bucketRange = "hourly",
   valueKey = "calls_total",
   bucketLabel = "时间桶",
   yLabel = "调用次数",
@@ -650,14 +680,14 @@ function LineChart({
           const x = prepared.padLeft + (prepared.buckets.length <= 1 ? prepared.innerW / 2 : (prepared.bucketIndex.get(bucket) / (prepared.buckets.length - 1)) * prepared.innerW);
           return (
             <text key={bucket} x={x} y={prepared.height - 26} textAnchor="middle" className="chart-label chart-x-label">
-              {formatBucket(bucket)}
+              {formatBucket(bucket, bucketRange)}
             </text>
           );
         })}
       </svg>
       {hoverIndex >= 0 ? (
         <div className="chart-tooltip" style={{ left: `${tooltipLeft}%` }}>
-          <strong>{formatBucket(hoverBucket)}</strong>
+          <strong>{formatBucket(hoverBucket, bucketRange)}</strong>
           <span>{bucketLabel}</span>
           <div className="chart-tooltip-list">
             {prepared.seriesData.map((series) => {
@@ -984,35 +1014,81 @@ function EndataCompactPanel({ endata }) {
 }
 
 function EndataBalancePanel({ endata }) {
+  const [endataChartMode, setEndataChartMode] = useState("day");
+  const [endataChartDay, setEndataChartDay] = useState("latest");
+  const [endataChartMonth, setEndataChartMonth] = useState("latest");
   const snapshots = endata?.latestSnapshots || [];
   const endpoints = endata?.endpoints || [];
-  const endpointHistory = (endata?.endpointHistory || []).map((item) => ({
-    ...item,
-    bucket_start: item.bucket_start,
-    display_name_cn: item.display_name_cn || item.url,
-  }));
-  const scriptUsageRows = (endata?.scriptUsageHourly || []).map((item) => ({
+  const endpointHistoryHourly = (endata?.endpointHistoryHourly || endata?.endpointHistory || []).map((item) => ({
     ...item,
     bucket_start: normalizeBucketStart(item.bucket_start, "hourly"),
+    period_key: item.period_key || localDateInputValue(item.bucket_start),
+    display_name_cn: item.display_name_cn || item.url,
+  }));
+  const endpointHistoryDaily = (endata?.endpointHistoryDaily || []).map((item) => ({
+    ...item,
+    bucket_start: normalizeBucketStart(item.bucket_start, "daily"),
+    period_key: item.period_key || getMonthKey(item.bucket_start),
+    display_name_cn: item.display_name_cn || item.url,
+  }));
+  const scriptUsageHourly = (endata?.scriptUsageHourly || []).map((item) => ({
+    ...item,
+    bucket_start: normalizeBucketStart(item.bucket_start, "hourly"),
+    period_key: item.period_key || localDateInputValue(item.bucket_start),
+    display_name_cn: item.display_name_cn || item.script_key || "未记录脚本",
+  }));
+  const scriptUsageDaily = (endata?.scriptUsageDaily || []).map((item) => ({
+    ...item,
+    bucket_start: normalizeBucketStart(item.bucket_start, "daily"),
+    period_key: item.period_key || getMonthKey(item.bucket_start),
     display_name_cn: item.display_name_cn || item.script_key || "未记录脚本",
   }));
   const latestSnapshot = latestEndataSnapshot(snapshots, "today");
   const monthSnapshot = latestEndataSnapshot(snapshots, "month");
+  const dayOptions = useMemo(() => endataPeriodOptions([...endpointHistoryHourly, ...scriptUsageHourly], "day"), [endpointHistoryHourly, scriptUsageHourly]);
+  const monthOptions = useMemo(() => endataPeriodOptions([...endpointHistoryDaily, ...scriptUsageDaily], "month"), [endpointHistoryDaily, scriptUsageDaily]);
+  useEffect(() => {
+    if (endataChartDay !== "latest" && !dayOptions.some((option) => option.value === endataChartDay)) setEndataChartDay("latest");
+  }, [endataChartDay, dayOptions]);
+  useEffect(() => {
+    if (endataChartMonth !== "latest" && !monthOptions.some((option) => option.value === endataChartMonth)) setEndataChartMonth("latest");
+  }, [endataChartMonth, monthOptions]);
+  const isDayView = endataChartMode === "day";
+  const activeDay = activeEndataPeriod(endataChartDay, dayOptions);
+  const activeMonth = activeEndataPeriod(endataChartMonth, monthOptions);
+  const activePeriod = isDayView ? activeDay : activeMonth;
+  const endpointChartRows = (isDayView ? endpointHistoryHourly : endpointHistoryDaily).filter((item) => item.period_key === activePeriod);
+  const scriptChartRows = (isDayView ? scriptUsageHourly : scriptUsageDaily).filter((item) => item.period_key === activePeriod);
+  const chartBucketDomain = useMemo(() => {
+    if (isDayView) {
+      if (!activeDay) return [];
+      const start = new Date(`${activeDay}T00:00:00`);
+      const end = new Date(`${activeDay}T23:00:00`);
+      return buildBucketDomain(start, end, "hourly");
+    }
+    if (!activeMonth) return [];
+    const start = new Date(`${activeMonth}-01T00:00:00`);
+    const latestDate = latestBucketDate([...endpointChartRows, ...scriptChartRows]);
+    const end = latestDate ? dayStart(latestDate) : new Date(start.getFullYear(), start.getMonth() + 1, 0);
+    return buildBucketDomain(start, end, "daily");
+  }, [isDayView, activeDay, activeMonth, endpointChartRows, scriptChartRows]);
+  const chartBucketLabel = isDayView ? "小时" : "日期";
+  const chartPeriodText = isDayView ? activeDay || "未选择日期" : monthLabel(activeMonth);
   const endpointSeriesDomain = useMemo(() => {
-    const entries = [...endpoints, ...endpointHistory]
+    const entries = endpointChartRows
       .filter((item) => item.url)
       .map((item) => [item.url, { id: item.url, label: item.display_name_cn || item.url }]);
     return Array.from(new Map(entries).values()).slice(0, 8);
-  }, [endpoints, endpointHistory]);
+  }, [endpointChartRows]);
   const scriptSeriesDomain = useMemo(() => {
-    const entries = scriptUsageRows
+    const entries = scriptChartRows
       .filter((item) => item.script_key)
       .map((item) => [item.script_key, { id: item.script_key, label: item.display_name_cn || item.script_key }]);
     return Array.from(new Map(entries).values()).slice(0, 8);
-  }, [scriptUsageRows]);
+  }, [scriptChartRows]);
   const scriptSummary = useMemo(() => {
     const byScript = new Map();
-    scriptUsageRows.forEach((row) => {
+    scriptChartRows.forEach((row) => {
       const key = row.script_key || "unknown";
       const current = byScript.get(key) || {
         script_key: key,
@@ -1031,11 +1107,35 @@ function EndataBalancePanel({ endata }) {
     return Array.from(byScript.values())
       .map((item) => ({ ...item, endpoints: Array.from(item.endpoints) }))
       .sort((a, b) => b.calls_total - a.calls_total || a.script_key.localeCompare(b.script_key));
-  }, [scriptUsageRows]);
+  }, [scriptChartRows]);
 
   return (
     <section className="panel endata-panel">
-      <SectionHeader icon={Gauge} title="艺恩余额与接口消耗" action={<StatusPill tone="neutral">30 秒刷新</StatusPill>} />
+      <SectionHeader
+        icon={Gauge}
+        title="艺恩余额与接口消耗"
+        action={
+          <div className="header-actions endata-toolbar">
+            <StatusPill tone="neutral">30 秒刷新</StatusPill>
+            <div className="endata-period-controls">
+              <SegmentedControl
+                value={endataChartMode}
+                onChange={setEndataChartMode}
+                options={[
+                  { value: "day", label: "日" },
+                  { value: "month", label: "月" },
+                ]}
+              />
+              <SelectControl
+                value={isDayView ? endataChartDay : endataChartMonth}
+                onChange={isDayView ? setEndataChartDay : setEndataChartMonth}
+                options={isDayView ? dayOptions : monthOptions}
+                label={isDayView ? "日期" : "月份"}
+              />
+            </div>
+          </div>
+        }
+      />
 
       <div className="endata-summary-grid">
         <div className="endata-metric-card">
@@ -1066,15 +1166,17 @@ function EndataBalancePanel({ endata }) {
         <div className="endata-chart-block">
           <div className="endata-block-title">
             <strong>接口累计调用波动</strong>
-            <span>艺恩余额接口快照</span>
+            <span>{chartPeriodText} · {isDayView ? "小时走势" : "每日走势"}</span>
           </div>
           <LineChart
-            rows={endpointHistory}
+            rows={endpointChartRows}
             seriesKey="url"
             seriesLabelKey="display_name_cn"
             seriesDomain={endpointSeriesDomain}
+            bucketDomain={chartBucketDomain}
+            bucketRange={isDayView ? "hourly" : "daily"}
             valueKey="count"
-            bucketLabel="采样时间"
+            bucketLabel={chartBucketLabel}
             yLabel="累计成功调用"
             emptyLabel="暂无接口调用快照"
           />
@@ -1082,15 +1184,17 @@ function EndataBalancePanel({ endata }) {
         <div className="endata-chart-block">
           <div className="endata-block-title">
             <strong>脚本调用波动</strong>
-            <span>近 72 小时网关日志</span>
+            <span>{chartPeriodText} · {isDayView ? "小时走势" : "每日走势"}</span>
           </div>
           <LineChart
-            rows={scriptUsageRows}
+            rows={scriptChartRows}
             seriesKey="script_key"
             seriesLabelKey="display_name_cn"
             seriesDomain={scriptSeriesDomain}
+            bucketDomain={chartBucketDomain}
+            bucketRange={isDayView ? "hourly" : "daily"}
             valueKey="calls_total"
-            bucketLabel="小时"
+            bucketLabel={chartBucketLabel}
             yLabel="艺恩调用次数"
             emptyLabel="暂无脚本调用日志"
           />
@@ -1130,35 +1234,43 @@ function EndataBalancePanel({ endata }) {
             </tr>
           </thead>
           <tbody>
-            {endpoints.map((item) => (
-              <tr key={item.url}>
-                <td>
-                  <code className="endata-path">{item.url}</code>
-                  <div className="note-meta">采样 {formatDateTimeSecond(item.sampled_at)}</div>
-                </td>
-                <td>
-                  <div className="note-title">{item.display_name_cn || item.url}</div>
-                  <div className="endata-description">{item.description_cn || "-"}</div>
-                </td>
-                <td>
-                  <div className="endata-call-metric">
-                    <strong>{formatNumber(item.count)}</strong>
-                    <span>{formatPercent(item.share_pct)}</span>
-                    <small className={`endata-delta ${deltaClass(item.count_delta)}`}>较上次 {formatSignedNumber(item.count_delta)}</small>
-                  </div>
-                </td>
-                <td>
-                  <div className="endpoint-script-tags">
-                    {(item.scripts || []).map((script) => (
-                      <span key={`${item.url}-${script.script_key}-${script.scope}`}>
-                        {script.display_name_cn}
-                        <em>{script.scope}</em>
-                      </span>
-                    ))}
-                  </div>
+            {endpoints.length ? (
+              endpoints.map((item) => (
+                <tr key={item.url}>
+                  <td>
+                    <code className="endata-path">{item.url}</code>
+                    <div className="note-meta">采样 {formatDateTimeSecond(item.sampled_at)}</div>
+                  </td>
+                  <td>
+                    <div className="note-title">{item.display_name_cn || item.url}</div>
+                    <div className="endata-description">{item.description_cn || "-"}</div>
+                  </td>
+                  <td>
+                    <div className="endata-call-metric">
+                      <strong>{formatNumber(item.count)}</strong>
+                      <span>{formatPercent(item.share_pct)}</span>
+                      <small className={`endata-delta ${deltaClass(item.count_delta)}`}>较上次 {formatSignedNumber(item.count_delta)}</small>
+                    </div>
+                  </td>
+                  <td>
+                    <div className="endpoint-script-tags">
+                      {(item.scripts || []).map((script) => (
+                        <span key={`${item.url}-${script.script_key}-${script.scope}`}>
+                          {script.display_name_cn}
+                          <em>{script.scope}</em>
+                        </span>
+                      ))}
+                    </div>
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td className="endata-empty-cell" colSpan="4">
+                  暂无艺恩接口详情
                 </td>
               </tr>
-            ))}
+            )}
           </tbody>
         </table>
       </div>
@@ -2588,6 +2700,7 @@ function OpsDashboard({ data, apiDate, onApiDateChange }) {
             seriesLabelKey="provider_label"
             seriesDomain={providerSeriesDomain}
             bucketDomain={bucketDomain}
+            bucketRange={range}
             bucketLabel={rangeLabel}
             yLabel="调用次数"
           />
@@ -2605,6 +2718,7 @@ function OpsDashboard({ data, apiDate, onApiDateChange }) {
             seriesLabelKey="model_label"
             seriesDomain={modelSeriesDomain}
             bucketDomain={bucketDomain}
+            bucketRange={range}
             valueKey="total_tokens"
             bucketLabel={rangeLabel}
             yLabel="Tokens 消耗量"
