@@ -120,13 +120,36 @@ function normalizeImagePrompts(value) {
     .slice(0, MAX_IMAGE_PROMPTS);
 }
 
+function buildVisualPrompt(row, hasImagePrompts) {
+  const informationDensity = [row.information_density_level, row.information_density_reason].filter(Boolean).join("：");
+  const rows = [
+    ["整组视觉风格", row.visual_group_style_prompt],
+    ["主色调", row.visual_main_colors],
+    ["视觉情绪", row.visual_emotion],
+    ["信息密度", informationDensity],
+    ["整组布局结构参考", row.layout_structure],
+    ["封面/首屏钩子逻辑参考", row.cover_text_logic],
+  ]
+    .map(([label, value]) => {
+      const text = cleanText(value, 1200);
+      return text ? `【${label}】\n${text}` : "";
+    })
+    .filter(Boolean);
+
+  if (!rows.length) return "";
+  if (!hasImagePrompts) return rows.join("\n");
+
+  return [
+    "【整组理解参考（不是单张执行指令）】",
+    "以下字段只用于帮助大模型理解原笔记的整体主题、受众、风格、配色、点击钩子和信息密度。生成每张图时，必须优先执行对应的“第N张原图对应提示词”；这里的封面/首屏/布局信息不得被直接套用到所有图片。",
+    rows.join("\n"),
+  ].join("\n");
+}
+
 function notePayload(row) {
   const imagePrompts = normalizeImagePrompts(row.image_prompts);
   const sourceImageCount = Number(row.source_image_count || 0);
   const suggestedImageCount = Math.max(1, Math.min(MAX_IMAGE_PROMPTS, imagePrompts.length || sourceImageCount || 1));
-  const visualPromptParts = imagePrompts.length
-    ? [row.visual_group_style_prompt]
-    : [row.visual_group_style_prompt, row.cover_text_logic, row.layout_structure];
   return {
     note_id: row.note_id,
     title: row.title || "",
@@ -135,7 +158,7 @@ function notePayload(row) {
     user_pain: [row.true_pain_label, row.pain_description, row.pain_evidence].filter(Boolean).join("\n"),
     business_logic: row.business_logic || row.content_logic || "",
     business_knowledge: normalizeKnowledgePoints(row.knowledge_points),
-    visual_prompt: visualPromptParts.filter(Boolean).join("\n"),
+    visual_prompt: buildVisualPrompt(row, imagePrompts.length > 0),
     image_prompts: imagePrompts,
     image_prompt_count: imagePrompts.length,
     source_image_count: sourceImageCount,
@@ -257,6 +280,10 @@ module.exports = async function handler(req, res) {
           a.content_logic,
           a.knowledge_points,
           a.visual_group_style_prompt,
+          a.visual_main_colors,
+          a.visual_emotion,
+          a.information_density_level,
+          a.information_density_reason,
           a.cover_text_logic,
           a.layout_structure,
           a.source_image_count,
