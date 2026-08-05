@@ -4602,7 +4602,11 @@ export default function App() {
               onContentRangeApply={handleContentRangeApply}
             />
           ) : null}
-          {activeView === "imageGen" ? <ImageGenerationWorkflow data={data} /> : null}
+          {canAccess(currentUser, "content") ? (
+            <div hidden={activeView !== "imageGen"}>
+              <ImageGenerationWorkflow data={data} />
+            </div>
+          ) : null}
           {activeView === "ops" ? <OpsDashboard data={data} apiDate={apiDate} onApiDateChange={handleApiDateChange} /> : null}
           {activeView === "models" ? <ModelConfigView data={data} /> : null}
           {activeView === "admin" ? <AdminConfigView currentUser={currentUser} permissionCatalog={permissionCatalog} /> : null}
