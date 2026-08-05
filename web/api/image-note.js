@@ -124,6 +124,9 @@ function notePayload(row) {
   const imagePrompts = normalizeImagePrompts(row.image_prompts);
   const sourceImageCount = Number(row.source_image_count || 0);
   const suggestedImageCount = Math.max(1, Math.min(MAX_IMAGE_PROMPTS, imagePrompts.length || sourceImageCount || 1));
+  const visualPromptParts = imagePrompts.length
+    ? [row.visual_group_style_prompt]
+    : [row.visual_group_style_prompt, row.cover_text_logic, row.layout_structure];
   return {
     note_id: row.note_id,
     title: row.title || "",
@@ -132,7 +135,7 @@ function notePayload(row) {
     user_pain: [row.true_pain_label, row.pain_description, row.pain_evidence].filter(Boolean).join("\n"),
     business_logic: row.business_logic || row.content_logic || "",
     business_knowledge: normalizeKnowledgePoints(row.knowledge_points),
-    visual_prompt: [row.visual_group_style_prompt, row.cover_text_logic, row.layout_structure].filter(Boolean).join("\n"),
+    visual_prompt: visualPromptParts.filter(Boolean).join("\n"),
     image_prompts: imagePrompts,
     image_prompt_count: imagePrompts.length,
     source_image_count: sourceImageCount,

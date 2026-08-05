@@ -99,6 +99,24 @@ function parseImagePrompts(value) {
     .slice(0, MAX_IMAGE_COUNT);
 }
 
+function promptForSlot(imagePrompts, slot) {
+  return imagePrompts.find((item) => item.slot === slot)?.prompt || imagePrompts[slot - 1]?.prompt || "";
+}
+
+function buildPromptIndex(imagePrompts, total) {
+  const rows = Array.from({ length: total }, (_, index) => {
+    const slot = index + 1;
+    const prompt = cleanText(promptForSlot(imagePrompts, slot), 700);
+    return prompt ? `第${slot}张：${prompt}` : "";
+  }).filter(Boolean);
+  if (!rows.length) return "";
+  return [
+    "【整组逐图内容索引（用于避免重复）】",
+    "下面是本组每张图的原图提示词摘要。当前任务只能执行自己的图片序号；其他序号只用于理解差异，不能复制其标题、主文案、构图或内容模块。",
+    rows.join("\n"),
+  ].join("\n");
+}
+
 function hasImagePrompt(input) {
   return Boolean(cleanText(input.imagePrompt, MAX_GLOBAL_PROMPT_CHARS) || parseImagePrompts(input.imagePrompts).length);
 }
@@ -143,10 +161,11 @@ function buildCommonPrompt(input) {
 
 function buildSlotPrompt(input, slot, total, imagePrompts) {
   const commonPrompt = buildCommonPrompt(input);
-  const slotPrompt = imagePrompts.find((item) => item.slot === slot)?.prompt || imagePrompts[slot - 1]?.prompt || "";
+  const slotPrompt = promptForSlot(imagePrompts, slot);
   const unifiedVisualStyle = input.unifiedVisualStyle !== false;
   return [
     commonPrompt,
+    buildPromptIndex(imagePrompts, total),
     unifiedVisualStyle && total > 1
       ? [
           "",
@@ -157,6 +176,10 @@ function buildSlotPrompt(input, slot, total, imagePrompts) {
     "",
     "【本张原图对应提示词】",
     slotPrompt || cleanText(input.imagePrompt, MAX_GLOBAL_PROMPT_CHARS),
+    "",
+    "【本张差异化执行规则】",
+    `当前只生成第${slot}张图。第${slot}张必须优先执行“本张原图对应提示词”，不得重复第1张或其他图片的主标题、主卖点、核心内容模块、布局结构和可见文字。`,
+    "如果本张提示词与整组共用内容相似，也要重新拆分成不同角度：保留同一主题和同一视觉系统，但换一个内容侧重点、信息结构和主视觉，不要生成同一张图的变体。",
     "",
     "【本次图片序号】",
     total > 1 ? `请只生成第${slot}张图。这张图必须优先理解并执行“本张原图对应提示词”，不要套用固定四图模板。` : "请生成当前这张图。",
