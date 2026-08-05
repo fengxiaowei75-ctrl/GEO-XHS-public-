@@ -1081,7 +1081,33 @@ module.exports = async function handler(req, res) {
       query(
         client,
         `
-        WITH ranked AS (
+        WITH base AS (
+          SELECT s.*
+          FROM public.endata_visit_stat_snapshots s
+          WHERE s.url_filter = ''
+            AND s.range_key IN ('today', 'yesterday', 'month')
+            AND s.sampled_at >= now() - interval '90 days'
+        ),
+        periods AS (
+          SELECT
+            range_key,
+            url_filter,
+            begin_code,
+            end_code,
+            max(sampled_at) AS latest_sampled_at
+          FROM base
+          GROUP BY range_key, url_filter, begin_code, end_code
+        ),
+        latest_periods AS (
+          SELECT
+            *,
+            row_number() OVER (
+              PARTITION BY range_key, url_filter
+              ORDER BY end_code DESC, begin_code DESC, latest_sampled_at DESC
+            ) AS period_rn
+          FROM periods
+        ),
+        ranked AS (
           SELECT
             s.*,
             lead(s.residue_fee) OVER (PARTITION BY s.range_key, s.begin_code, s.end_code, s.url_filter ORDER BY s.sampled_at DESC) AS previous_residue_fee,
@@ -1089,10 +1115,13 @@ module.exports = async function handler(req, res) {
             lead(s.sampled_at) OVER (PARTITION BY s.range_key, s.begin_code, s.end_code, s.url_filter ORDER BY s.sampled_at DESC) AS previous_sampled_at,
             count(*) OVER (PARTITION BY s.range_key, s.begin_code, s.end_code, s.url_filter)::int AS snapshot_count,
             row_number() OVER (PARTITION BY s.range_key, s.begin_code, s.end_code, s.url_filter ORDER BY s.sampled_at DESC) AS rn
-          FROM public.endata_visit_stat_snapshots s
-          WHERE s.url_filter = ''
-            AND s.range_key IN ('today', 'yesterday', 'month')
-            AND s.sampled_at >= now() - interval '90 days'
+          FROM base s
+          JOIN latest_periods p
+            ON p.range_key = s.range_key
+           AND p.url_filter = s.url_filter
+           AND p.begin_code = s.begin_code
+           AND p.end_code = s.end_code
+           AND p.period_rn = 1
         )
         SELECT
           snapshot_id,
@@ -1117,7 +1146,10 @@ module.exports = async function handler(req, res) {
         FROM ranked
         WHERE rn = 1
         ORDER BY
-          CASE range_key WHEN 'today' THEN 1 WHEN 'yesterday' THEN 2 WHEN 'month' THEN 3 ELSE 9 END
+          CASE range_key WHEN 'today' THEN 1 WHEN 'yesterday' THEN 2 WHEN 'month' THEN 3 ELSE 9 END,
+          end_code DESC,
+          begin_code DESC,
+          sampled_at DESC
         `,
       ),
       query(
@@ -1140,7 +1172,11 @@ module.exports = async function handler(req, res) {
             AND s.sampled_at >= now() - interval '14 days'
         ),
         latest AS (
-          SELECT * FROM ranked WHERE rn = 1
+          SELECT *
+          FROM ranked
+          WHERE rn = 1
+          ORDER BY end_code DESC, begin_code DESC, sampled_at DESC
+          LIMIT 1
         )
         SELECT
           d.url,

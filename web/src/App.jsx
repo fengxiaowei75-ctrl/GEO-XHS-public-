@@ -258,6 +258,18 @@ function endataRangeLabel(value) {
   return labels[value] || value || "-";
 }
 
+function latestEndataSnapshot(snapshots, rangeKey) {
+  const candidates = (snapshots || []).filter((item) => item?.range_key === rangeKey);
+  if (!candidates.length) return {};
+  return [...candidates].sort((a, b) => {
+    const endCodeCompare = String(b?.end_code || "").localeCompare(String(a?.end_code || ""));
+    if (endCodeCompare) return endCodeCompare;
+    const beginCodeCompare = String(b?.begin_code || "").localeCompare(String(a?.begin_code || ""));
+    if (beginCodeCompare) return beginCodeCompare;
+    return new Date(b?.sampled_at || 0).getTime() - new Date(a?.sampled_at || 0).getTime();
+  })[0];
+}
+
 function deltaClass(value) {
   const number = Number(value || 0);
   if (number > 0) return "endata-delta-up";
@@ -930,7 +942,7 @@ function ApiStatusComboChart({ rows, selectedProvider, selectedStatus, onSelect 
 function EndataCompactPanel({ endata }) {
   const snapshots = endata?.latestSnapshots || [];
   const endpoints = endata?.endpoints || [];
-  const latestSnapshot = snapshots.find((item) => item.range_key === "today") || snapshots[0] || {};
+  const latestSnapshot = latestEndataSnapshot(snapshots, "today");
   const topEndpoints = endpoints.slice(0, 3);
 
   return (
@@ -984,8 +996,8 @@ function EndataBalancePanel({ endata }) {
     bucket_start: normalizeBucketStart(item.bucket_start, "hourly"),
     display_name_cn: item.display_name_cn || item.script_key || "未记录脚本",
   }));
-  const latestSnapshot = snapshots.find((item) => item.range_key === "today") || snapshots[0] || {};
-  const monthSnapshot = snapshots.find((item) => item.range_key === "month") || {};
+  const latestSnapshot = latestEndataSnapshot(snapshots, "today");
+  const monthSnapshot = latestEndataSnapshot(snapshots, "month");
   const endpointSeriesDomain = useMemo(() => {
     const entries = [...endpoints, ...endpointHistory]
       .filter((item) => item.url)
