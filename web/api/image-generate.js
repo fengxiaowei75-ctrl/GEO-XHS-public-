@@ -5,6 +5,8 @@ const PROVIDER_CODE = "duomi_image_generation";
 const DEFAULT_IMAGE_API_URL = "https://duomiapi.com/v1/images/generations";
 const DEFAULT_TASK_API_URL = "https://duomiapi.com/v1/tasks";
 const DEFAULT_IMAGE_MODEL = "gpt-image-2";
+const MAX_IMAGE_COUNT = 10;
+const MAX_GLOBAL_PROMPT_CHARS = 5000;
 
 let pool;
 
@@ -74,7 +76,7 @@ function parseBoolean(value, fallback = false) {
 function normalizeImageCount(value) {
   const count = Number(value);
   if (!Number.isFinite(count)) return 1;
-  return Math.max(1, Math.min(4, Math.floor(count)));
+  return Math.max(1, Math.min(MAX_IMAGE_COUNT, Math.floor(count)));
 }
 
 function parseImagePrompts(value) {
@@ -85,11 +87,11 @@ function parseImagePrompts(value) {
       prompt: cleanText(typeof item === "string" ? item : item?.prompt, 5000),
     }))
     .filter((item) => item.prompt)
-    .slice(0, 4);
+    .slice(0, MAX_IMAGE_COUNT);
 }
 
 function hasImagePrompt(input) {
-  return Boolean(cleanText(input.imagePrompt, 1800) || parseImagePrompts(input.imagePrompts).length);
+  return Boolean(cleanText(input.imagePrompt, MAX_GLOBAL_PROMPT_CHARS) || parseImagePrompts(input.imagePrompts).length);
 }
 
 function buildCommonPrompt(input) {
@@ -117,7 +119,7 @@ function buildCommonPrompt(input) {
     cleanText(input.businessKnowledge, 1800),
     "",
     "【整组风格提示词/全局补充】",
-    cleanText(input.imagePrompt, 1800),
+    cleanText(input.imagePrompt, MAX_GLOBAL_PROMPT_CHARS),
   ]
     .filter((item) => item !== "")
     .join("\n");
@@ -138,7 +140,7 @@ function buildSlotPrompt(input, slot, total, imagePrompts) {
       : "",
     "",
     "【本张原图对应提示词】",
-    slotPrompt || cleanText(input.imagePrompt, 1800),
+    slotPrompt || cleanText(input.imagePrompt, MAX_GLOBAL_PROMPT_CHARS),
     "",
     "【本次图片序号】",
     total > 1 ? `请只生成第${slot}张图。这张图必须优先理解并执行“本张原图对应提示词”，不要套用固定四图模板。` : "请生成当前这张图。",

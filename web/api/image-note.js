@@ -2,6 +2,7 @@ const { Pool } = require("pg");
 const { requireAuth } = require("./_auth");
 
 let pool;
+const MAX_IMAGE_PROMPTS = 10;
 
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
@@ -113,13 +114,13 @@ function normalizeImagePrompts(value) {
       };
     })
     .filter(Boolean)
-    .slice(0, 4);
+    .slice(0, MAX_IMAGE_PROMPTS);
 }
 
 function notePayload(row) {
   const imagePrompts = normalizeImagePrompts(row.image_prompts);
   const sourceImageCount = Number(row.source_image_count || 0);
-  const suggestedImageCount = Math.max(1, Math.min(4, imagePrompts.length || sourceImageCount || 1));
+  const suggestedImageCount = Math.max(1, Math.min(MAX_IMAGE_PROMPTS, imagePrompts.length || sourceImageCount || 1));
   return {
     note_id: row.note_id,
     title: row.title || "",
@@ -224,7 +225,7 @@ module.exports = async function handler(req, res) {
                 NULLIF(trim(cover_text_logic), '')
               ) IS NOT NULL
             ORDER BY image_index, analyzed_at DESC NULLS LAST, updated_at DESC NULLS LAST, id DESC
-            LIMIT 4
+            LIMIT 10
           ) p
           GROUP BY note_id
         )

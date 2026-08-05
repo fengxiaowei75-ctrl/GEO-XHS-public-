@@ -6,6 +6,8 @@ const platformLabels = {
   wechat: "公众号",
   zhihu: "知乎",
 };
+const MAX_WORKFLOW_IMAGES = 10;
+const MAX_IMAGE_PROMPT_CHARS = 60000;
 
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
@@ -91,7 +93,7 @@ function markdownFor(input, platformLabel) {
     "",
     "## 生图提示词",
     "",
-    cleanText(input.imagePrompt, 8000) || "暂无",
+    cleanText(input.imagePrompt, MAX_IMAGE_PROMPT_CHARS) || "暂无",
     "",
     "## 图片文件",
     "",
@@ -258,7 +260,7 @@ module.exports = async function handler(req, res) {
             userPain: cleanText(input.userPain, 5000),
             businessLogic: cleanText(input.businessLogic, 5000),
             businessKnowledge: cleanText(input.businessKnowledge, 6000),
-            imagePrompt: cleanText(input.imagePrompt, 8000),
+            imagePrompt: cleanText(input.imagePrompt, MAX_IMAGE_PROMPT_CHARS),
             socialContent: cleanText(input.socialContent, 20000),
             generatedAt: cleanText(input.producedAt, 80) || new Date().toISOString(),
             savedBy: user.user_id,
@@ -270,7 +272,7 @@ module.exports = async function handler(req, res) {
     ];
 
     const imageLinks = [];
-    const images = Array.isArray(input.images) ? input.images.slice(0, 4) : [];
+    const images = Array.isArray(input.images) ? input.images.slice(0, MAX_WORKFLOW_IMAGES) : [];
     for (let index = 0; index < images.length; index += 1) {
       const url = cleanText(images[index]?.url || images[index], 4000);
       if (!url) continue;

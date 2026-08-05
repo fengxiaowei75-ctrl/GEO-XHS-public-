@@ -4,6 +4,8 @@ const { requireAuth } = require("./_auth");
 const PROVIDER_CODE = "volcengine_ark_chat";
 const DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
 const DEFAULT_MODEL = "doubao-seed-2-0-mini-260428";
+const MAX_WORKFLOW_IMAGES = 10;
+const MAX_IMAGE_PROMPT_CHARS = 60000;
 
 const platformConfigs = {
   xhs: {
@@ -124,7 +126,7 @@ function buildUserPrompt(input, platform) {
   const config = platformConfigs[platform] || platformConfigs.xhs;
   const imageLines = Array.isArray(input.images)
     ? input.images
-        .slice(0, 4)
+        .slice(0, MAX_WORKFLOW_IMAGES)
         .map((image, index) => `第${index + 1}张图：${cleanText(image?.url || "", 400)}`)
         .join("\n")
     : "";
@@ -153,7 +155,7 @@ function buildUserPrompt(input, platform) {
     cleanText(input.businessKnowledge, 1800),
     "",
     "【生图提示词】",
-    cleanText(input.imagePrompt, 1800),
+    cleanText(input.imagePrompt, MAX_IMAGE_PROMPT_CHARS),
     "",
     "【已生成图片】",
     imageLines || "暂无",

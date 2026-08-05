@@ -1312,11 +1312,12 @@ const socialPlatformOptions = [
 const socialPlatformLabels = Object.fromEntries(socialPlatformOptions.map((item) => [item.value, item.label]));
 const imageWorkflowHistoryKey = "geo:image-generation-workflow-history:v1";
 const maxImageWorkflowHistory = 12;
+const maxWorkflowImages = 10;
 
 function normalizeWorkflowImageCount(value) {
   const count = Number(value);
   if (!Number.isFinite(count)) return 1;
-  return Math.max(1, Math.min(4, Math.floor(count)));
+  return Math.max(1, Math.min(maxWorkflowImages, Math.floor(count)));
 }
 
 function normalizeWorkflowImagePrompts(value) {
@@ -1330,7 +1331,7 @@ function normalizeWorkflowImagePrompts(value) {
       imageUrl: String(item?.imageUrl || item?.image_url || "").trim(),
     }))
     .filter((item) => item.prompt)
-    .slice(0, 4);
+    .slice(0, maxWorkflowImages);
 }
 
 function imagePromptAt(form, slot) {
@@ -1394,21 +1395,21 @@ function wait(ms) {
 }
 
 function imageSlotItems(result) {
-  const slots = Array.from({ length: 4 }, (_, index) => ({
+  const slots = Array.from({ length: maxWorkflowImages }, (_, index) => ({
     slot: index + 1,
     image: null,
     status: "empty",
   }));
   (result?.tasks || []).forEach((task) => {
     const slotIndex = Number(task.slot || 0) - 1;
-    if (slotIndex >= 0 && slotIndex < 4) {
+    if (slotIndex >= 0 && slotIndex < maxWorkflowImages) {
       slots[slotIndex].status = task.status || result?.status || "processing";
       slots[slotIndex].taskId = task.taskId;
       if (task.images?.[0]) slots[slotIndex].image = { ...task.images[0], slot: slotIndex + 1 };
     }
   });
   (result?.images || []).forEach((image, index) => {
-    const slotIndex = Math.max(0, Math.min(3, Number(image.slot || index + 1) - 1));
+    const slotIndex = Math.max(0, Math.min(maxWorkflowImages - 1, Number(image.slot || index + 1) - 1));
     if (!slots[slotIndex].image) slots[slotIndex].image = { ...image, slot: slotIndex + 1 };
     slots[slotIndex].status = "succeeded";
   });
@@ -1480,7 +1481,7 @@ function historyFormSnapshot(form) {
 }
 
 function compactImageResult(result) {
-  const tasks = (result?.tasks || []).slice(0, 4).map((task) => ({
+  const tasks = (result?.tasks || []).slice(0, maxWorkflowImages).map((task) => ({
     slot: Number(task.slot || 0),
     taskId: task.taskId || "",
     status: task.status || "",
@@ -1491,7 +1492,7 @@ function compactImageResult(result) {
   }));
   const topLevelImages = (result?.images || []).filter((image) => image?.url);
   const sourceImages = topLevelImages.length ? topLevelImages : tasks.flatMap((task) => task.images || []);
-  const images = sourceImages.slice(0, 4).map((image, index) => ({
+  const images = sourceImages.slice(0, maxWorkflowImages).map((image, index) => ({
     id: image.id || `history-image-${index}`,
     url: image.url,
     slot: Number(image.slot || index + 1),
@@ -1506,7 +1507,7 @@ function compactImageResult(result) {
     imageCount: result?.imageCount || images.length || 1,
     model: result?.model || "",
     size: result?.size || "",
-    prompt: String(result?.prompt || "").slice(0, 12000),
+    prompt: String(result?.prompt || "").slice(0, 60000),
     latencyMs: result?.latencyMs || 0,
     logWarning: result?.logWarning || "",
   };
@@ -1570,7 +1571,7 @@ function ImageGenerationWorkflow({ data }) {
 
   function updateImagePrompt(slot, value) {
     setForm((current) => {
-      const nextPrompts = Array.from({ length: 4 }, (_, index) => {
+      const nextPrompts = Array.from({ length: maxWorkflowImages }, (_, index) => {
         const promptSlot = index + 1;
         return normalizeWorkflowImagePrompts(current.imagePrompts).find((item) => item.slot === promptSlot) || { slot: promptSlot, prompt: "" };
       });
@@ -1913,10 +1914,10 @@ function ImageGenerationWorkflow({ data }) {
             onChange={(value) => updateForm({ imageCount: value })}
             label="数量"
             options={[
-              { value: "1", label: "1张" },
-              { value: "2", label: "2张" },
-              { value: "3", label: "3张" },
-              { value: "4", label: "4张" },
+              ...Array.from({ length: maxWorkflowImages }, (_, index) => {
+                const count = String(index + 1);
+                return { value: count, label: `${count}张` };
+              }),
             ]}
           />
           <label className="image-style-toggle">
