@@ -67,6 +67,15 @@ function cleanText(value, max = 4000) {
   return String(value || "").trim().slice(0, max);
 }
 
+function currentDateText() {
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
 function parseBoolean(value, fallback = false) {
   if (value === undefined || value === null || value === "") return fallback;
   if (typeof value === "boolean") return value;
@@ -98,7 +107,14 @@ function buildCommonPrompt(input) {
   return [
     "请基于下面的小红书笔记内容资产和垫图要求，生成适合作为GEO内容运营素材的图片。",
     "画面需要专业、信息层级清晰，适合小红书知识内容首图或正文配图；如出现中文文字，必须简洁、清晰、无错别字。",
-    "禁止复制原品牌Logo、商标、水印或可识别个人隐私信息。",
+    "",
+    "【强制安全与时效规则】",
+    `当前日期：${currentDateText()}。`,
+    "1. 所有组图都不能出现任何别人的公司名、品牌Logo、商标、博主账号、账号ID、头像、水印、店铺名、二维码、网址、联系方式或可识别个人隐私信息。",
+    "2. 如果原图提示词、OCR、垫图或笔记内容里带有第三方公司/账号/博主名，只能抽象成“某品牌”“某账号”“行业案例”等通用表达，不能复刻具体名称。",
+    "3. 不要复刻原图里的旧日期、截图时间、发布年份或活动时间。非实时新闻/明确历史案例不要在图片上写具体年月日。",
+    "4. 如果必须出现日期，只能使用输入材料中明确真实且仍有必要保留的日期；涉及实时新闻时可使用真实日期。禁止编造日期，禁止把旧素材里的 2024/2025 年误当成当前时间。",
+    "5. 所有图中文字必须围绕当前笔记重新生成，不要原样照搬原图标题、原图日期、原图账号和原图品牌露出。",
     "",
     "【笔记标题】",
     cleanText(input.title, 500),

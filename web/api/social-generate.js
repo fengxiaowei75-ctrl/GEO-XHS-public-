@@ -89,6 +89,15 @@ function cleanText(value, max = 4000) {
   return String(value || "").trim().slice(0, max);
 }
 
+function currentDateText() {
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
 function modelHeaders(apiKey) {
   return {
     Authorization: `Bearer ${apiKey}`,
@@ -135,6 +144,15 @@ function buildUserPrompt(input, platform) {
     config.instruction,
     "",
     "请基于下面的 GEO 内容资产生成可直接二次编辑的社媒草稿。不要编造无法从材料推导出的事实；如信息不足，用可替换占位表达。",
+    "",
+    "【强制改写与安全规则】",
+    `当前日期：${currentDateText()}。`,
+    "1. 原笔记只作为素材来源，不能直接复刻。必须结合目标人群画像、用户痛点、需求、业务逻辑和业务知识点重新组织内容，让新稿比原稿更清晰、更有价值、更利于发布。",
+    "2. 标题必须重新生成：不能和原笔记标题一模一样，也不能只做标点、语序或近义词替换。标题要围绕用户痛点/反常识/收益点/搜索关键词重新设计。",
+    "3. 正文不能原样照搬原笔记文案；要重写开头钩子、内容结构、案例表达、行动建议和结尾引导。保留事实和知识点，但表达方式、层次和卖点必须升级。",
+    "4. 不要出现第三方公司名、品牌Logo、博主账号、账号ID、头像、水印、店铺名、二维码、网址、联系方式或可识别个人隐私信息；如素材里出现这些信息，统一抽象成“某品牌”“某账号”“行业案例”。",
+    "5. 不要复刻原图/原文里的旧日期、截图时间、发布年份或活动时间。非实时新闻/明确历史案例不要写具体年月日；如必须出现日期，只能使用输入材料中真实且必要的日期，禁止编造日期，禁止把 2024/2025 年误当成当前时间。",
+    "6. 输出要体现“为什么用户需要看这篇”：先解决痛点和需求，再展开方法论/知识点，最后给可执行建议或转化路径。",
     "",
     "【笔记标题】",
     cleanText(input.title, 500),
@@ -281,7 +299,7 @@ module.exports = async function handler(req, res) {
       messages: [
         {
           role: "system",
-          content: "你是资深中文内容策略和社媒编辑，擅长把业务知识资产改写为不同平台的可发布草稿。",
+          content: "你是资深中文内容策略和社媒编辑，擅长把原始笔记素材重构为更强的多平台可发布草稿。你必须重写标题和正文结构，不能复刻原文、账号、品牌露出或错误日期。",
         },
         { role: "user", content: prompt },
       ],

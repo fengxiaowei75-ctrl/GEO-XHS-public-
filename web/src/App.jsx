@@ -1868,7 +1868,7 @@ function ImageGenerationWorkflow({ data }) {
                 label="整组风格/全局补充"
                 value={form.imagePrompt}
                 onChange={(value) => updateForm({ imagePrompt: value })}
-                placeholder="整组统一风格、主配色、品牌限制、禁止项或额外补充"
+                placeholder="整组统一风格、主配色、禁止第三方公司/账号/Logo/水印/旧日期，或其他补充"
                 rows={5}
               />
               <div className="image-slot-prompt-list">
