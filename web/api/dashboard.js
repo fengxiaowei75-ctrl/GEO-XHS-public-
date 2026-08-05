@@ -907,6 +907,7 @@ module.exports = async function handler(req, res) {
             WHEN 'kimi_chat' THEN 4
             WHEN 'volcengine_ark_embedding' THEN 5
             WHEN 'volcengine_ark_image_generation' THEN 6
+            WHEN 'duomi_image_generation' THEN 7
             ELSE 20
           END,
           calls_total DESC,

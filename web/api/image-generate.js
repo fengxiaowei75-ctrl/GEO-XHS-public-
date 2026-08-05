@@ -1,9 +1,10 @@
 const { Pool } = require("pg");
 const { requireAuth } = require("./_auth");
 
-const PROVIDER_CODE = "volcengine_ark_image_generation";
-const DEFAULT_IMAGE_API_URL = "https://ark.cn-beijing.volces.com/api/v3/images/generations";
-const DEFAULT_IMAGE_MODEL = "doubao-seedream-4-5-251128";
+const PROVIDER_CODE = "duomi_image_generation";
+const DEFAULT_IMAGE_API_URL = "https://duomiapi.com/v1/images/generations";
+const DEFAULT_TASK_API_URL = "https://duomiapi.com/v1/tasks";
+const DEFAULT_IMAGE_MODEL = "gpt-image-2";
 
 let pool;
 
@@ -64,11 +65,17 @@ function cleanText(value, max = 4000) {
   return String(value || "").trim().slice(0, max);
 }
 
+function parseBoolean(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  return ["1", "true", "yes", "y"].includes(String(value).trim().toLowerCase());
+}
+
 function buildPrompt(input) {
   return [
-    "请基于下面的小红书笔记内容资产和垫图，生成一张适合作为GEO内容运营素材的竖版图片。",
-    "要求：保留垫图中可复用的构图/视觉气质，但不要复制原品牌Logo、商标、水印或可识别个人隐私信息。",
+    "请基于下面的小红书笔记内容资产和垫图要求，生成一张适合作为GEO内容运营素材的图片。",
     "画面需要专业、信息层级清晰，适合小红书知识内容首图或正文配图；如出现中文文字，必须简洁、清晰、无错别字。",
+    "禁止复制原品牌Logo、商标、水印或可识别个人隐私信息。",
     "",
     "【笔记标题】",
     cleanText(input.title, 500),
@@ -96,14 +103,97 @@ function buildPrompt(input) {
 }
 
 function extractImages(payload) {
-  const data = Array.isArray(payload?.data) ? payload.data : [];
-  return data
-    .map((item, index) => {
-      if (item?.url) return { id: `url-${index}`, url: item.url };
-      if (item?.b64_json) return { id: `b64-${index}`, url: `data:image/png;base64,${item.b64_json}` };
-      return null;
-    })
-    .filter(Boolean);
+  const found = [];
+
+  function addUrl(value, loose = false) {
+    if (!value || typeof value !== "string") return;
+    const text = value.trim();
+    if (!text) return;
+    if (text.startsWith("data:image/")) {
+      found.push(text);
+      return;
+    }
+    if (!/^https?:\/\//i.test(text)) return;
+    if (loose || /\.(png|jpe?g|webp|gif)(\?|#|$)/i.test(text) || /image|img|cdn|oss|cos|r2|s3/i.test(text)) found.push(text);
+  }
+
+  function walk(value, depth = 0) {
+    if (!value || depth > 6) return;
+    if (typeof value === "string") {
+      addUrl(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item) => walk(item, depth + 1));
+      return;
+    }
+    if (typeof value !== "object") return;
+
+    if (value.b64_json) addUrl(`data:image/png;base64,${value.b64_json}`);
+    [
+      "url",
+      "image",
+      "image_url",
+      "imageUrl",
+      "output_url",
+      "outputUrl",
+      "result_url",
+      "resultUrl",
+    ].forEach((key) => addUrl(value[key], true));
+    [
+      "data",
+      "images",
+      "image_urls",
+      "imageUrls",
+      "output",
+      "outputs",
+      "result",
+      "results",
+      "artifacts",
+      "items",
+    ].forEach((key) => walk(value[key], depth + 1));
+  }
+
+  walk(payload);
+  return Array.from(new Set(found)).map((url, index) => ({ id: `image-${index}`, url }));
+}
+
+function extractTaskId(payload) {
+  const candidates = [
+    payload?.id,
+    payload?.task_id,
+    payload?.taskId,
+    payload?.data?.id,
+    payload?.data?.task_id,
+    payload?.data?.taskId,
+    payload?.result?.id,
+    payload?.result?.task_id,
+    payload?.result?.taskId,
+  ];
+  return cleanText(candidates.find(Boolean), 160);
+}
+
+function taskUrlFor(taskId) {
+  const base = process.env.IMAGE_GENERATION_TASK_API_URL || DEFAULT_TASK_API_URL;
+  if (base.includes("{id}")) return base.replace("{id}", encodeURIComponent(taskId));
+  return `${base.replace(/\/$/, "")}/${encodeURIComponent(taskId)}`;
+}
+
+function imageProviderHeaders(apiKey) {
+  const prefix = cleanText(process.env.IMAGE_GENERATION_AUTH_PREFIX, 32);
+  return {
+    Authorization: prefix ? `${prefix} ${apiKey}` : apiKey,
+    "Content-Type": "application/json",
+  };
+}
+
+function appendReferenceImage(requestBody, referenceImage) {
+  if (!referenceImage) return false;
+  const field = cleanText(process.env.IMAGE_GENERATION_REFERENCE_FIELD, 64) || "image";
+  if (field.toLowerCase() === "none") return false;
+  const normalizedField = field.endsWith("[]") ? field.slice(0, -2) : field;
+  requestBody[normalizedField] = field.endsWith("[]") ? [referenceImage] : referenceImage;
+  return true;
 }
 
 async function lookupModelConfig(client, model) {
@@ -155,9 +245,9 @@ async function writeApiLog(client, record) {
         PROVIDER_CODE,
         record.modelConfigId || null,
         record.credentialId || null,
-        "image_generation_workflow",
+        record.operation || "image_generation_create_task",
         record.status,
-        "POST",
+        record.httpMethod || "POST",
         record.requestHost,
         record.requestPath,
         record.httpStatus || null,
@@ -196,16 +286,17 @@ module.exports = async function handler(req, res) {
     if (!user) return;
 
     const input = await readJsonBody(req);
-    const apiKey = process.env.IMAGE_GENERATION_API_KEY || process.env.ARK_API_KEY;
+    const apiKey = process.env.IMAGE_GENERATION_API_KEY;
     const apiUrl = process.env.IMAGE_GENERATION_API_URL || DEFAULT_IMAGE_API_URL;
     const model = process.env.IMAGE_GENERATION_MODEL || DEFAULT_IMAGE_MODEL;
-    const size = cleanText(input.size, 32) || process.env.IMAGE_GENERATION_SIZE || "2K";
+    const size = cleanText(input.size, 32) || process.env.IMAGE_GENERATION_SIZE || "1024x1024";
+    const oversea = parseBoolean(input.oversea, parseBoolean(process.env.IMAGE_GENERATION_OVERSEA, false));
     const prompt = buildPrompt(input);
     const noteId = cleanText(input.noteId, 120);
     const referenceImage = cleanText(input.referenceImage, 10 * 1024 * 1024);
 
     if (!apiKey) {
-      sendJson(res, 500, { ok: false, error: "服务端缺少 IMAGE_GENERATION_API_KEY 或 ARK_API_KEY" });
+      sendJson(res, 500, { ok: false, error: "服务端缺少 IMAGE_GENERATION_API_KEY" });
       return;
     }
     if (!cleanText(input.imagePrompt, 1800)) {
@@ -222,26 +313,15 @@ module.exports = async function handler(req, res) {
     const modelConfig = await lookupModelConfig(client, model);
 
     const endpoint = new URL(apiUrl);
-    const requestBody = {
-      model,
-      prompt,
-      response_format: "url",
-      size,
-      sequential_image_generation: "disabled",
-      stream: false,
-      watermark: false,
-    };
-    if (referenceImage) requestBody.image = [referenceImage];
+    const requestBody = { model, prompt, size, oversea };
+    const referenceImageSent = appendReferenceImage(requestBody, referenceImage);
 
-    const arkRes = await fetch(endpoint.toString(), {
+    const providerRes = await fetch(endpoint.toString(), {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
+      headers: imageProviderHeaders(apiKey),
       body: JSON.stringify(requestBody),
     });
-    const responseText = await arkRes.text();
+    const responseText = await providerRes.text();
     const finishedAt = new Date();
     const latencyMs = Date.now() - startedMono;
     let payload = {};
@@ -252,38 +332,53 @@ module.exports = async function handler(req, res) {
     }
 
     const images = extractImages(payload);
+    const taskId = extractTaskId(payload);
     const logWarning = await writeApiLog(client, {
       traceId: `web:image-generation:${Date.now()}`,
       modelConfigId: modelConfig.model_config_id,
       credentialId: modelConfig.credential_id,
-      status: arkRes.ok && images.length ? "success" : "failed",
+      status: providerRes.ok ? "success" : "failed",
       requestHost: endpoint.host,
       requestPath: endpoint.pathname,
-      httpStatus: arkRes.status,
+      httpStatus: providerRes.status,
       noteId,
       startedAt,
       finishedAt,
       latencyMs,
       requestBytes: Buffer.byteLength(JSON.stringify(requestBody)),
       responseBytes: Buffer.byteLength(responseText || ""),
-      estimatedUnits: images.length || 1,
-      errorCode: arkRes.ok ? "" : String(payload?.error?.code || payload?.code || arkRes.status),
-      errorMessage: arkRes.ok ? "" : String(payload?.error?.message || payload?.message || responseText).slice(0, 500),
-      rawUsage: { image_count: images.length, response_created: payload?.created || null },
+      estimatedUnits: providerRes.ok ? 1 : 0,
+      errorCode: providerRes.ok ? "" : String(payload?.error?.code || payload?.code || providerRes.status),
+      errorMessage: providerRes.ok ? "" : String(payload?.error?.message || payload?.message || responseText).slice(0, 500),
+      rawUsage: { image_count: images.length, task_id: taskId || null },
       metadata: {
         source: "web_image_generation_workflow",
+        provider: "duomiapi",
         model,
         size,
+        oversea,
+        task_url: taskId ? taskUrlFor(taskId) : null,
         has_reference_image: Boolean(referenceImage),
+        reference_image_sent: referenceImageSent,
         prompt_chars: prompt.length,
         user_id: user.user_id,
       },
     });
 
-    if (!arkRes.ok || !images.length) {
-      sendJson(res, arkRes.ok ? 502 : arkRes.status, {
+    if (!providerRes.ok) {
+      sendJson(res, providerRes.status, {
         ok: false,
-        error: payload?.error?.message || payload?.message || "图像生成失败",
+        error: payload?.error?.message || payload?.message || "图像生成任务创建失败",
+        detail: payload,
+        logWarning,
+      });
+      return;
+    }
+
+    if (!taskId && !images.length) {
+      sendJson(res, 502, {
+        ok: false,
+        error: "图像生成任务创建成功，但响应中没有找到任务 ID 或图片 URL",
         detail: payload,
         logWarning,
       });
@@ -292,6 +387,8 @@ module.exports = async function handler(req, res) {
 
     sendJson(res, 200, {
       ok: true,
+      taskId,
+      status: images.length ? "succeeded" : "processing",
       images,
       model,
       size,
@@ -306,21 +403,21 @@ module.exports = async function handler(req, res) {
       await writeApiLog(client, {
         traceId: `web:image-generation:${Date.now()}`,
         status: "failed",
-        requestHost: "ark.cn-beijing.volces.com",
-        requestPath: "/api/v3/images/generations",
+        requestHost: "duomiapi.com",
+        requestPath: "/v1/images/generations",
         startedAt,
         finishedAt,
         latencyMs,
         requestBytes: 0,
         responseBytes: 0,
-        estimatedUnits: 1,
+        estimatedUnits: 0,
         errorCode: "request_exception",
         errorMessage: error.message,
         rawUsage: {},
-        metadata: { source: "web_image_generation_workflow" },
+        metadata: { source: "web_image_generation_workflow", provider: "duomiapi" },
       });
     }
-    sendJson(res, error.statusCode || 500, { ok: false, error: error.message || "图像生成失败" });
+    sendJson(res, error.statusCode || 500, { ok: false, error: error.message || "图像生成任务创建失败" });
   } finally {
     if (client) client.release();
   }

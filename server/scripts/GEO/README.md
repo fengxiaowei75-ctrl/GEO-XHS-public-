@@ -107,4 +107,4 @@ fresh_hot_score = interaction_score * recency_factor
 - `KIMI_TEMPERATURE` / `KIMI_THINKING` 仅作为历史兼容兜底
 - `ARK_API_KEY` 或 `VOLC_API_KEY`
 - `ARK_EMBEDDING_MODEL`，默认 `doubao-embedding-vision-251215`
-- 图像生成/图生图复用 `ARK_API_KEY`，模型配置表默认 `doubao-seedream-4-5-251128`，备用 `doubao-seedream-4-0-250828`，Web 默认尺寸 `IMAGE_GENERATION_SIZE=2K`
+- 图像生成/图生图使用 `IMAGE_GENERATION_API_KEY` 调用 Duomi API，模型配置表默认 `gpt-image-2`，Web 默认尺寸 `IMAGE_GENERATION_SIZE=1024x1024`

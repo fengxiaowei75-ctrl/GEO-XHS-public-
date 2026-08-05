@@ -64,10 +64,11 @@ const providerLabels = {
   volcengine_ark_chat: "豆包内容资产总结（痛点/人群/漏斗标签）",
   volcengine_ark_embedding: "豆包 Embedding（内容资产转向量）",
   volcengine_ark_image_generation: "豆包图像生成/图生图（Seedream）",
+  duomi_image_generation: "Duomi 图像生成/图生图（gpt-image-2）",
   kimi_chat: "Kimi 历史内容资产总结（旧模型记录）",
 };
 const providerChartOrder = new Map(
-  ["endata_xhs_note_detail", "volcengine_ark_vision", "volcengine_ark_chat", "kimi_chat", "volcengine_ark_embedding", "volcengine_ark_image_generation"].map(
+  ["endata_xhs_note_detail", "volcengine_ark_vision", "volcengine_ark_chat", "kimi_chat", "volcengine_ark_embedding", "volcengine_ark_image_generation", "duomi_image_generation"].map(
     (code, index) => [code, index],
   ),
 );
@@ -1295,7 +1296,7 @@ const emptyImageWorkflowForm = {
   imagePrompt: "",
   referenceImage: "",
   referenceImageName: "",
-  size: "2K",
+  size: "1024x1024",
 };
 
 function imageWorkflowFormFromNote(note, current) {
@@ -1310,6 +1311,23 @@ function imageWorkflowFormFromNote(note, current) {
     businessKnowledge: note.business_knowledge || "",
     imagePrompt: current.imagePrompt || note.visual_prompt || "",
   };
+}
+
+function imageTaskStatusLabel(status) {
+  const labels = {
+    queued: "排队中",
+    processing: "生成中",
+    running: "生成中",
+    succeeded: "已完成",
+    failed: "失败",
+  };
+  return labels[status] || status || "生成中";
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 function ImageWorkflowField({ label, value, onChange, multiline = true, placeholder = "", rows = 4 }) {
@@ -1391,6 +1409,7 @@ function ImageGenerationWorkflow({ data }) {
       setMessage("请填写生图提示词");
       return;
     }
+    const startedAt = Date.now();
     setGenerating(true);
     setMessage("");
     setResult(null);
@@ -1410,8 +1429,40 @@ function ImageGenerationWorkflow({ data }) {
           size: form.size,
         }),
       });
-      setResult(payload);
-      setMessage(payload.logWarning ? `已生成，监控日志写入提示：${payload.logWarning}` : "已生成并写入监控日志");
+      const baseResult = { ...payload, latencyMs: Date.now() - startedAt };
+      setResult(baseResult);
+      if (payload.images?.length) {
+        setMessage(payload.logWarning ? `已生成，监控日志写入提示：${payload.logWarning}` : "已生成并写入监控日志");
+        return;
+      }
+      if (!payload.taskId) {
+        throw new Error("图像生成任务创建成功，但没有返回任务 ID");
+      }
+      setMessage(payload.logWarning ? `任务已创建，监控日志写入提示：${payload.logWarning}` : "任务已创建，等待生成结果");
+
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        await wait(attempt === 0 ? 1600 : 3000);
+        const taskPayload = await requestJson(`/api/image-task?taskId=${encodeURIComponent(payload.taskId)}`);
+        const nextResult = {
+          ...baseResult,
+          ...taskPayload,
+          model: payload.model,
+          size: payload.size,
+          prompt: payload.prompt,
+          logWarning: payload.logWarning,
+          latencyMs: Date.now() - startedAt,
+        };
+        setResult(nextResult);
+        if (taskPayload.status === "failed") {
+          throw new Error(taskPayload.error || "图像生成任务失败");
+        }
+        if (taskPayload.images?.length) {
+          setMessage(payload.logWarning ? `已生成，监控日志写入提示：${payload.logWarning}` : "已生成并写入监控日志");
+          return;
+        }
+        setMessage(`任务${payload.taskId} ${imageTaskStatusLabel(taskPayload.status)}`);
+      }
+      throw new Error("图像生成仍在处理中，请稍后重新点击生成或检查任务状态");
     } catch (error) {
       setMessage(error.message);
     } finally {
@@ -1471,9 +1522,9 @@ function ImageGenerationWorkflow({ data }) {
             onChange={(value) => updateForm({ size: value })}
             label="尺寸"
             options={[
-              { value: "2K", label: "2K" },
-              { value: "4K", label: "4K" },
               { value: "1024x1024", label: "1024x1024" },
+              { value: "1024x1536", label: "1024x1536" },
+              { value: "1536x1024", label: "1536x1024" },
             ]}
           />
         </div>
@@ -1514,6 +1565,7 @@ function ImageGenerationWorkflow({ data }) {
             <div className="image-result-meta">
               <span>尺寸 {result.size}</span>
               <span>耗时 {formatDuration(result.latencyMs)}</span>
+              {result.taskId ? <span>任务 {result.taskId}</span> : null}
               <span>{result.logWarning ? "监控日志待补" : "监控日志已写入"}</span>
             </div>
             <div className="image-prompt-preview">

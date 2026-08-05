@@ -2661,6 +2661,7 @@ tbody tr:hover {
   color: var(--muted);
   font-size: 12px;
   font-weight: 780;
+  overflow-wrap: anywhere;
 }
 
 .image-prompt-preview {
