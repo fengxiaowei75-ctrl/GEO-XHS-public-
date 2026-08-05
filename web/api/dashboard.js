@@ -3,8 +3,6 @@ const { permissionCatalog, requireAuth } = require("./_auth");
 
 let pool;
 
-const requiredEnv = ["PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD"];
-
 const endataEndpointMeta = {
   "/v2/xhs/getstandardnoteinfo": {
     display_name_cn: "艺恩详情 API 调用",
@@ -60,23 +58,28 @@ function enrichEndataEndpoint(row) {
   };
 }
 
-function hasDatabaseEnv() {
-  return requiredEnv.every((key) => Boolean(process.env[key]));
+function getPoolConfig() {
+  const ssl = process.env.PGSSLMODE === "require" ? { rejectUnauthorized: false } : false;
+  if (process.env.DATABASE_URL) return { connectionString: process.env.DATABASE_URL, ssl, max: 2, idleTimeoutMillis: 30000 };
+
+  const requiredEnv = ["PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD"];
+  if (!requiredEnv.every((key) => Boolean(process.env[key]))) return null;
+  return {
+    host: process.env.PGHOST,
+    port: Number(process.env.PGPORT || 5432),
+    database: process.env.PGDATABASE,
+    user: process.env.PGUSER,
+    password: process.env.PGPASSWORD,
+    ssl,
+    max: 2,
+    idleTimeoutMillis: 30000,
+  };
 }
 
 function getPool() {
-  if (!pool) {
-    pool = new Pool({
-      host: process.env.PGHOST,
-      port: Number(process.env.PGPORT || 5432),
-      database: process.env.PGDATABASE,
-      user: process.env.PGUSER,
-      password: process.env.PGPASSWORD,
-      ssl: process.env.PGSSLMODE === "require" ? { rejectUnauthorized: false } : false,
-      max: 2,
-      idleTimeoutMillis: 30000,
-    });
-  }
+  const config = getPoolConfig();
+  if (!config) return null;
+  if (!pool) pool = new Pool(config);
   return pool;
 }
 
@@ -416,7 +419,8 @@ function sampleData() {
 module.exports = async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
 
-  if (!hasDatabaseEnv()) {
+  const dbPool = getPool();
+  if (!dbPool) {
     res.status(200).json(sampleData());
     return;
   }
@@ -449,7 +453,7 @@ module.exports = async function handler(req, res) {
   }
   const contentWhere = contentWhereParts.join(" AND ");
 
-  const client = await getPool().connect();
+  const client = await dbPool.connect();
   try {
     const [
       overviewRows,
