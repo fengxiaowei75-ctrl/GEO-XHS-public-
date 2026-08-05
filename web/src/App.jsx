@@ -1637,7 +1637,8 @@ function ImageGenerationWorkflow({ data }) {
       });
       setForm((current) => imageWorkflowFormFromNote(payload.note || {}, current));
       const promptCount = Number(payload.note?.image_prompt_count || 0);
-      setMessage(`已读取 ${payload.note?.source || "数据库"} 字段${promptCount ? `，逐图提示词 ${promptCount} 条` : ""}`);
+      const promptWarning = payload.note?.image_prompt_warning ? `，逐图提示词暂未读取：${payload.note.image_prompt_warning}` : "";
+      setMessage(`已读取 ${payload.note?.source || "数据库"} 字段${promptCount ? `，逐图提示词 ${promptCount} 条` : ""}${promptWarning}`);
     } catch (error) {
       setMessage(error.message);
     } finally {

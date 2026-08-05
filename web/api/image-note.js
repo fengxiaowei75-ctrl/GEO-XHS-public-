@@ -58,7 +58,10 @@ function getPool() {
 }
 
 function cleanNoteId(value) {
-  return String(value || "").trim();
+  return String(value || "")
+    .trim()
+    .split(/[·\s]+/)[0]
+    .trim();
 }
 
 function cleanText(value, max = 4000) {
@@ -135,8 +138,68 @@ function notePayload(row) {
     source_image_count: sourceImageCount,
     analyzed_image_count: Number(row.analyzed_image_count || imagePrompts.length || 0),
     suggested_image_count: suggestedImageCount,
+    image_prompt_warning: row.image_prompt_warning || "",
     source: row.asset_id ? "geo_note_content_assets" : "note_details",
   };
+}
+
+async function loadImagePrompts(client, noteId) {
+  try {
+    const { rows } = await client.query(
+      `
+      SELECT
+        jsonb_agg(
+          jsonb_build_object(
+            'slot', image_index + 1,
+            'image_index', image_index,
+            'image_url', image_url,
+            'image2_prompt', image2_prompt,
+            'image2_style_prompt', image2_style_prompt,
+            'visible_text', visible_text,
+            'cover_text_logic', cover_text_logic,
+            'layout_structure', layout_structure,
+            'visual_format', visual_format,
+            'typography_style', typography_style,
+            'color_palette', color_palette,
+            'information_density', information_density
+          )
+          ORDER BY image_index
+        ) AS image_prompts
+      FROM (
+        SELECT DISTINCT ON (image_index)
+          image_index,
+          image_url,
+          image2_prompt,
+          image2_style_prompt,
+          visible_text,
+          cover_text_logic,
+          layout_structure,
+          visual_format,
+          typography_style,
+          color_palette,
+          information_density,
+          analyzed_at,
+          updated_at,
+          id
+        FROM public.image_analysis
+        WHERE note_id = $1
+          AND status = 'success'
+          AND COALESCE(
+            NULLIF(trim(image2_prompt), ''),
+            NULLIF(trim(image2_style_prompt), ''),
+            NULLIF(trim(layout_structure), ''),
+            NULLIF(trim(cover_text_logic), '')
+          ) IS NOT NULL
+        ORDER BY image_index, analyzed_at DESC NULLS LAST, updated_at DESC NULLS LAST, id DESC
+        LIMIT 10
+      ) p
+      `,
+      [noteId],
+    );
+    return { image_prompts: rows[0]?.image_prompts || [], image_prompt_warning: "" };
+  } catch (error) {
+    return { image_prompts: [], image_prompt_warning: error.message || "逐图提示词读取失败" };
+  }
 }
 
 module.exports = async function handler(req, res) {
@@ -177,57 +240,6 @@ module.exports = async function handler(req, res) {
           WHERE note_id = $1
           ORDER BY generated_at DESC NULLS LAST, updated_at DESC NULLS LAST, asset_id DESC
           LIMIT 1
-        ),
-        image_prompt_rows AS (
-          SELECT
-            note_id,
-            jsonb_agg(
-              jsonb_build_object(
-                'slot', image_index + 1,
-                'image_index', image_index,
-                'image_url', image_url,
-                'image2_prompt', image2_prompt,
-                'image2_style_prompt', image2_style_prompt,
-                'visible_text', visible_text,
-                'cover_text_logic', cover_text_logic,
-                'layout_structure', layout_structure,
-                'visual_format', visual_format,
-                'typography_style', typography_style,
-                'color_palette', color_palette,
-                'information_density', information_density
-              )
-              ORDER BY image_index
-            ) AS image_prompts
-          FROM (
-            SELECT DISTINCT ON (image_index)
-              note_id,
-              image_index,
-              image_url,
-              image2_prompt,
-              image2_style_prompt,
-              visible_text,
-              cover_text_logic,
-              layout_structure,
-              visual_format,
-              typography_style,
-              color_palette,
-              information_density,
-              analyzed_at,
-              updated_at,
-              id
-            FROM public.image_analysis
-            WHERE note_id = $1
-              AND status = 'success'
-              AND COALESCE(
-                NULLIF(trim(image2_prompt), ''),
-                NULLIF(trim(image2_style_prompt), ''),
-                NULLIF(trim(layout_structure), ''),
-                NULLIF(trim(cover_text_logic), '')
-              ) IS NOT NULL
-            ORDER BY image_index, analyzed_at DESC NULLS LAST, updated_at DESC NULLS LAST, id DESC
-            LIMIT 10
-          ) p
-          GROUP BY note_id
         )
         SELECT
           COALESCE(a.note_id, n.note_id) AS note_id,
@@ -245,11 +257,9 @@ module.exports = async function handler(req, res) {
           a.cover_text_logic,
           a.layout_structure,
           a.source_image_count,
-          a.analyzed_image_count,
-          p.image_prompts
+          a.analyzed_image_count
         FROM public.note_details n
         FULL JOIN latest_asset a ON a.note_id = n.note_id
-        LEFT JOIN image_prompt_rows p ON p.note_id = COALESCE(a.note_id, n.note_id)
         WHERE COALESCE(a.note_id, n.note_id) = $1
         LIMIT 1
         `,
@@ -261,7 +271,8 @@ module.exports = async function handler(req, res) {
         return;
       }
 
-      sendJson(res, 200, { ok: true, note: notePayload(rows[0]) });
+      const imagePromptResult = await loadImagePrompts(client, note_id);
+      sendJson(res, 200, { ok: true, note: notePayload({ ...rows[0], ...imagePromptResult }) });
     } finally {
       client.release();
     }
