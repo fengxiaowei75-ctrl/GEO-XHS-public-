@@ -1294,6 +1294,8 @@ const emptyImageWorkflowForm = {
   businessLogic: "",
   businessKnowledge: "",
   imagePrompt: "",
+  imagePrompts: [],
+  unifiedVisualStyle: true,
   referenceImage: "",
   referenceImageName: "",
   size: "1024x1024",
@@ -1311,7 +1313,54 @@ const socialPlatformLabels = Object.fromEntries(socialPlatformOptions.map((item)
 const imageWorkflowHistoryKey = "geo:image-generation-workflow-history:v1";
 const maxImageWorkflowHistory = 12;
 
+function normalizeWorkflowImageCount(value) {
+  const count = Number(value);
+  if (!Number.isFinite(count)) return 1;
+  return Math.max(1, Math.min(4, Math.floor(count)));
+}
+
+function normalizeWorkflowImagePrompts(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item, index) => ({
+      slot: normalizeWorkflowImageCount(item?.slot || index + 1),
+      prompt: String(typeof item === "string" ? item : item?.prompt || "")
+        .trim()
+        .slice(0, 5000),
+      imageUrl: String(item?.imageUrl || item?.image_url || "").trim(),
+    }))
+    .filter((item) => item.prompt)
+    .slice(0, 4);
+}
+
+function imagePromptAt(form, slot) {
+  const prompts = normalizeWorkflowImagePrompts(form.imagePrompts);
+  return prompts.find((item) => Number(item.slot) === slot)?.prompt || prompts[slot - 1]?.prompt || "";
+}
+
+function hasWorkflowPrompt(form) {
+  return Boolean(String(form.imagePrompt || "").trim() || normalizeWorkflowImagePrompts(form.imagePrompts).length);
+}
+
+function promptPayloadForSave(form) {
+  const rows = [];
+  if (String(form.imagePrompt || "").trim()) rows.push(`【整组风格/全局补充】\n${form.imagePrompt.trim()}`);
+  normalizeWorkflowImagePrompts(form.imagePrompts).forEach((item) => {
+    rows.push(`【第${item.slot}张原图对应提示词】\n${item.prompt}`);
+  });
+  return rows.join("\n\n");
+}
+
+function imagePromptSummary(form) {
+  const promptCount = normalizeWorkflowImagePrompts(form.imagePrompts).length;
+  const globalText = String(form.imagePrompt || "").trim();
+  if (promptCount) return `${globalText ? "整组已填" : "整组未填"} · 逐图${promptCount}条`;
+  return globalText ? textPreview(globalText, 96) : "未填写";
+}
+
 function imageWorkflowFormFromNote(note, current) {
+  const imagePrompts = normalizeWorkflowImagePrompts(note.image_prompts);
+  const imageCount = normalizeWorkflowImageCount(note.suggested_image_count || imagePrompts.length || current.imageCount);
   return {
     ...current,
     noteId: note.note_id || current.noteId,
@@ -1321,7 +1370,9 @@ function imageWorkflowFormFromNote(note, current) {
     userPain: note.user_pain || "",
     businessLogic: note.business_logic || "",
     businessKnowledge: note.business_knowledge || "",
-    imagePrompt: current.imagePrompt || note.visual_prompt || "",
+    imagePrompt: note.visual_prompt || current.imagePrompt || "",
+    imagePrompts: imagePrompts.length ? imagePrompts : current.imagePrompts || [],
+    imageCount: String(imageCount),
   };
 }
 
@@ -1340,10 +1391,6 @@ function wait(ms) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
   });
-}
-
-function normalizeWorkflowImageCount(value) {
-  return Number(value) === 4 ? 4 : 1;
 }
 
 function imageSlotItems(result) {
@@ -1424,6 +1471,8 @@ function historyFormSnapshot(form) {
     businessLogic: form.businessLogic || "",
     businessKnowledge: form.businessKnowledge || "",
     imagePrompt: form.imagePrompt || "",
+    imagePrompts: normalizeWorkflowImagePrompts(form.imagePrompts),
+    unifiedVisualStyle: form.unifiedVisualStyle !== false,
     referenceImageName: form.referenceImageName || "",
     size: form.size || "1024x1024",
     imageCount: form.imageCount || "1",
@@ -1519,6 +1568,17 @@ function ImageGenerationWorkflow({ data }) {
     setForm((current) => ({ ...current, ...patch }));
   }
 
+  function updateImagePrompt(slot, value) {
+    setForm((current) => {
+      const nextPrompts = Array.from({ length: 4 }, (_, index) => {
+        const promptSlot = index + 1;
+        return normalizeWorkflowImagePrompts(current.imagePrompts).find((item) => item.slot === promptSlot) || { slot: promptSlot, prompt: "" };
+      });
+      nextPrompts[slot - 1] = { ...nextPrompts[slot - 1], slot, prompt: value };
+      return { ...current, imagePrompts: nextPrompts.filter((item) => item.prompt.trim()) };
+    });
+  }
+
   function handleSocialPlatformChange(value) {
     setSocialPlatform(value);
     setSocialDraft(null);
@@ -1575,7 +1635,8 @@ function ImageGenerationWorkflow({ data }) {
         body: JSON.stringify({ noteId }),
       });
       setForm((current) => imageWorkflowFormFromNote(payload.note || {}, current));
-      setMessage(`已读取 ${payload.note?.source || "数据库"} 字段`);
+      const promptCount = Number(payload.note?.image_prompt_count || 0);
+      setMessage(`已读取 ${payload.note?.source || "数据库"} 字段${promptCount ? `，逐图提示词 ${promptCount} 条` : ""}`);
     } catch (error) {
       setMessage(error.message);
     } finally {
@@ -1603,12 +1664,13 @@ function ImageGenerationWorkflow({ data }) {
 
   async function generateImage(event) {
     event.preventDefault();
-    if (!form.imagePrompt.trim()) {
+    if (!hasWorkflowPrompt(form)) {
       setMessage("请填写生图提示词");
       return;
     }
     const startedAt = Date.now();
     const imageCount = normalizeWorkflowImageCount(form.imageCount);
+    const imagePrompts = normalizeWorkflowImagePrompts(form.imagePrompts).slice(0, imageCount);
     setGenerating(true);
     setMessage("");
     setResult(null);
@@ -1624,6 +1686,8 @@ function ImageGenerationWorkflow({ data }) {
           businessLogic: form.businessLogic,
           businessKnowledge: form.businessKnowledge,
           imagePrompt: form.imagePrompt,
+          imagePrompts,
+          unifiedVisualStyle: form.unifiedVisualStyle !== false,
           referenceImage: form.referenceImage,
           size: form.size,
           imageCount,
@@ -1706,7 +1770,7 @@ function ImageGenerationWorkflow({ data }) {
           userPain: form.userPain,
           businessLogic: form.businessLogic,
           businessKnowledge: form.businessKnowledge,
-          imagePrompt: form.imagePrompt,
+          imagePrompt: promptPayloadForSave(form),
           images: generatedImagesForSave(result),
         }),
       });
@@ -1738,7 +1802,7 @@ function ImageGenerationWorkflow({ data }) {
           userPain: form.userPain,
           businessLogic: form.businessLogic,
           businessKnowledge: form.businessKnowledge,
-          imagePrompt: form.imagePrompt,
+          imagePrompt: promptPayloadForSave(form),
           socialContent: socialDraft?.content || "",
           images: generatedImagesForSave(result),
         }),
@@ -1797,16 +1861,33 @@ function ImageGenerationWorkflow({ data }) {
             <strong>{promptOpen ? "收起" : "展开"}</strong>
           </button>
           {promptOpen ? (
-            <ImageWorkflowField
-              label="提示词内容"
-              value={form.imagePrompt}
-              onChange={(value) => updateForm({ imagePrompt: value })}
-              placeholder="写清图片风格、构图、文字、色彩、信息层级和禁止项；生成4张时可分别写第一张、第二张、第三张、第四张"
-              rows={6}
-            />
+            <div className="image-prompt-editor">
+              <ImageWorkflowField
+                label="整组风格/全局补充"
+                value={form.imagePrompt}
+                onChange={(value) => updateForm({ imagePrompt: value })}
+                placeholder="整组统一风格、主配色、品牌限制、禁止项或额外补充"
+                rows={5}
+              />
+              <div className="image-slot-prompt-list">
+                {Array.from({ length: normalizeWorkflowImageCount(form.imageCount) }, (_, index) => {
+                  const slot = index + 1;
+                  return (
+                    <ImageWorkflowField
+                      key={slot}
+                      label={`第${slot}张原图对应提示词`}
+                      value={imagePromptAt(form, slot)}
+                      onChange={(value) => updateImagePrompt(slot, value)}
+                      placeholder="读取 note_id 后会自动填充对应原图的 image2 提示词，也可手工修改"
+                      rows={5}
+                    />
+                  );
+                })}
+              </div>
+            </div>
           ) : (
             <button className="image-prompt-summary" type="button" onClick={() => setPromptOpen(true)}>
-              {form.imagePrompt ? textPreview(form.imagePrompt, 96) : "未填写"}
+              {imagePromptSummary(form)}
             </button>
           )}
         </div>
@@ -1833,9 +1914,19 @@ function ImageGenerationWorkflow({ data }) {
             label="数量"
             options={[
               { value: "1", label: "1张" },
+              { value: "2", label: "2张" },
+              { value: "3", label: "3张" },
               { value: "4", label: "4张" },
             ]}
           />
+          <label className="image-style-toggle">
+            <input
+              checked={form.unifiedVisualStyle !== false}
+              type="checkbox"
+              onChange={(event) => updateForm({ unifiedVisualStyle: event.target.checked })}
+            />
+            <span>统一风格/配色</span>
+          </label>
         </div>
 
         {form.referenceImage ? (

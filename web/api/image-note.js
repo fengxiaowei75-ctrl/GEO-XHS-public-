@@ -60,6 +60,10 @@ function cleanNoteId(value) {
   return String(value || "").trim();
 }
 
+function cleanText(value, max = 4000) {
+  return String(value || "").trim().slice(0, max);
+}
+
 function normalizeKnowledgePoints(value) {
   if (!value) return "";
   const rows = Array.isArray(value) ? value : [value];
@@ -72,7 +76,50 @@ function normalizeKnowledgePoints(value) {
     .join("\n");
 }
 
+function buildImagePrompt(row) {
+  return [
+    ["原图复写提示词", row.image2_prompt],
+    ["原图风格提示词", row.image2_style_prompt],
+    ["可见文字/OCR", row.visible_text],
+    ["封面/首屏文字逻辑", row.cover_text_logic],
+    ["版式结构", row.layout_structure],
+    ["视觉类型", row.visual_format],
+    ["字体/强调方式", row.typography_style],
+    ["配色结构", row.color_palette],
+    ["信息密度", row.information_density],
+  ]
+    .map(([label, value]) => {
+      const text = cleanText(value, 1200);
+      return text ? `【${label}】\n${text}` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function normalizeImagePrompts(value) {
+  const rows = Array.isArray(value) ? value : [];
+  return rows
+    .map((item, index) => {
+      const prompt = cleanText(item.prompt || buildImagePrompt(item), 5000);
+      if (!prompt) return null;
+      return {
+        slot: Number(item.slot || index + 1),
+        imageIndex: Number.isFinite(Number(item.image_index)) ? Number(item.image_index) : Number(item.slot || index + 1) - 1,
+        imageUrl: cleanText(item.image_url, 2000),
+        prompt,
+        image2Prompt: cleanText(item.image2_prompt, 2500),
+        image2StylePrompt: cleanText(item.image2_style_prompt, 1600),
+        colorPalette: cleanText(item.color_palette, 800),
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 4);
+}
+
 function notePayload(row) {
+  const imagePrompts = normalizeImagePrompts(row.image_prompts);
+  const sourceImageCount = Number(row.source_image_count || 0);
+  const suggestedImageCount = Math.max(1, Math.min(4, imagePrompts.length || sourceImageCount || 1));
   return {
     note_id: row.note_id,
     title: row.title || "",
@@ -82,6 +129,11 @@ function notePayload(row) {
     business_logic: row.business_logic || row.content_logic || "",
     business_knowledge: normalizeKnowledgePoints(row.knowledge_points),
     visual_prompt: [row.visual_group_style_prompt, row.cover_text_logic, row.layout_structure].filter(Boolean).join("\n"),
+    image_prompts: imagePrompts,
+    image_prompt_count: imagePrompts.length,
+    source_image_count: sourceImageCount,
+    analyzed_image_count: Number(row.analyzed_image_count || imagePrompts.length || 0),
+    suggested_image_count: suggestedImageCount,
     source: row.asset_id ? "geo_note_content_assets" : "note_details",
   };
 }
@@ -124,6 +176,57 @@ module.exports = async function handler(req, res) {
           WHERE note_id = $1
           ORDER BY generated_at DESC NULLS LAST, updated_at DESC NULLS LAST, asset_id DESC
           LIMIT 1
+        ),
+        image_prompt_rows AS (
+          SELECT
+            note_id,
+            jsonb_agg(
+              jsonb_build_object(
+                'slot', image_index + 1,
+                'image_index', image_index,
+                'image_url', image_url,
+                'image2_prompt', image2_prompt,
+                'image2_style_prompt', image2_style_prompt,
+                'visible_text', visible_text,
+                'cover_text_logic', cover_text_logic,
+                'layout_structure', layout_structure,
+                'visual_format', visual_format,
+                'typography_style', typography_style,
+                'color_palette', color_palette,
+                'information_density', information_density
+              )
+              ORDER BY image_index
+            ) AS image_prompts
+          FROM (
+            SELECT DISTINCT ON (image_index)
+              note_id,
+              image_index,
+              image_url,
+              image2_prompt,
+              image2_style_prompt,
+              visible_text,
+              cover_text_logic,
+              layout_structure,
+              visual_format,
+              typography_style,
+              color_palette,
+              information_density,
+              analyzed_at,
+              updated_at,
+              id
+            FROM public.image_analysis
+            WHERE note_id = $1
+              AND status = 'success'
+              AND COALESCE(
+                NULLIF(trim(image2_prompt), ''),
+                NULLIF(trim(image2_style_prompt), ''),
+                NULLIF(trim(layout_structure), ''),
+                NULLIF(trim(cover_text_logic), '')
+              ) IS NOT NULL
+            ORDER BY image_index, analyzed_at DESC NULLS LAST, updated_at DESC NULLS LAST, id DESC
+            LIMIT 4
+          ) p
+          GROUP BY note_id
         )
         SELECT
           COALESCE(a.note_id, n.note_id) AS note_id,
@@ -139,9 +242,13 @@ module.exports = async function handler(req, res) {
           a.knowledge_points,
           a.visual_group_style_prompt,
           a.cover_text_logic,
-          a.layout_structure
+          a.layout_structure,
+          a.source_image_count,
+          a.analyzed_image_count,
+          p.image_prompts
         FROM public.note_details n
         FULL JOIN latest_asset a ON a.note_id = n.note_id
+        LEFT JOIN image_prompt_rows p ON p.note_id = COALESCE(a.note_id, n.note_id)
         WHERE COALESCE(a.note_id, n.note_id) = $1
         LIMIT 1
         `,

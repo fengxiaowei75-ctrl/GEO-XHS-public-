@@ -72,10 +72,27 @@ function parseBoolean(value, fallback = false) {
 }
 
 function normalizeImageCount(value) {
-  return Number(value) === 4 ? 4 : 1;
+  const count = Number(value);
+  if (!Number.isFinite(count)) return 1;
+  return Math.max(1, Math.min(4, Math.floor(count)));
 }
 
-function buildPrompt(input) {
+function parseImagePrompts(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item, index) => ({
+      slot: Number(item?.slot || index + 1),
+      prompt: cleanText(typeof item === "string" ? item : item?.prompt, 5000),
+    }))
+    .filter((item) => item.prompt)
+    .slice(0, 4);
+}
+
+function hasImagePrompt(input) {
+  return Boolean(cleanText(input.imagePrompt, 1800) || parseImagePrompts(input.imagePrompts).length);
+}
+
+function buildCommonPrompt(input) {
   return [
     "请基于下面的小红书笔记内容资产和垫图要求，生成适合作为GEO内容运营素材的图片。",
     "画面需要专业、信息层级清晰，适合小红书知识内容首图或正文配图；如出现中文文字，必须简洁、清晰、无错别字。",
@@ -99,23 +116,40 @@ function buildPrompt(input) {
     "【业务知识点】",
     cleanText(input.businessKnowledge, 1800),
     "",
-    "【本次生图提示词】",
+    "【整组风格提示词/全局补充】",
     cleanText(input.imagePrompt, 1800),
   ]
     .filter((item) => item !== "")
     .join("\n");
 }
 
-function buildSlotPrompt(input, slot, total) {
-  const prompt = buildPrompt(input);
-  if (total <= 1) return prompt;
+function buildSlotPrompt(input, slot, total, imagePrompts) {
+  const commonPrompt = buildCommonPrompt(input);
+  const slotPrompt = imagePrompts.find((item) => item.slot === slot)?.prompt || imagePrompts[slot - 1]?.prompt || "";
+  const unifiedVisualStyle = input.unifiedVisualStyle !== false;
   return [
-    prompt,
+    commonPrompt,
+    unifiedVisualStyle && total > 1
+      ? [
+          "",
+          "【全组统一风格/配色约束（最高优先级）】",
+          "本组图片必须共用同一套视觉系统、主配色、字体气质、留白规则和信息密度。若单张原图提示词之间存在冲突，优先保持整组风格与配色统一，再保留每张图自己的内容结构。",
+        ].join("\n")
+      : "",
+    "",
+    "【本张原图对应提示词】",
+    slotPrompt || cleanText(input.imagePrompt, 1800),
     "",
     "【本次图片序号】",
-    `请只生成第${slot}张图。若生图提示词中分别描述了第一张图、第二张图、第三张图、第四张图，请严格优先执行第${slot}张图对应的风格、构图和文字要求。`,
-    "四张图需要彼此有统一内容主题，但每张图应有清晰差异，不要重复同一构图。",
-  ].join("\n");
+    total > 1 ? `请只生成第${slot}张图。这张图必须优先理解并执行“本张原图对应提示词”，不要套用固定四图模板。` : "请生成当前这张图。",
+    total > 1 ? "多张图之间保持同一笔记主题和阅读连贯性，但每张图只承担自己原图提示词对应的内容，不要重复同一构图。" : "",
+  ]
+    .filter((item) => item !== "")
+    .join("\n");
+}
+
+function buildPromptPreview(input, total, imagePrompts) {
+  return Array.from({ length: total }, (_, index) => `--- 第${index + 1}张发送提示词 ---\n${buildSlotPrompt(input, index + 1, total, imagePrompts)}`).join("\n\n");
 }
 
 function extractImages(payload) {
@@ -308,7 +342,8 @@ module.exports = async function handler(req, res) {
     const size = cleanText(input.size, 32) || process.env.IMAGE_GENERATION_SIZE || "1024x1024";
     const imageCount = normalizeImageCount(input.imageCount);
     const oversea = parseBoolean(input.oversea, parseBoolean(process.env.IMAGE_GENERATION_OVERSEA, false));
-    const prompt = buildPrompt(input);
+    const imagePrompts = parseImagePrompts(input.imagePrompts);
+    const prompt = buildPromptPreview(input, imageCount, imagePrompts);
     const noteId = cleanText(input.noteId, 120);
     const referenceImage = cleanText(input.referenceImage, 10 * 1024 * 1024);
 
@@ -316,7 +351,7 @@ module.exports = async function handler(req, res) {
       sendJson(res, 500, { ok: false, error: "服务端缺少 IMAGE_GENERATION_API_KEY" });
       return;
     }
-    if (!cleanText(input.imagePrompt, 1800)) {
+    if (!hasImagePrompt(input)) {
       sendJson(res, 400, { ok: false, error: "请填写生图提示词" });
       return;
     }
@@ -337,7 +372,7 @@ module.exports = async function handler(req, res) {
     for (let slot = 1; slot <= imageCount; slot += 1) {
       const slotStartedAt = new Date();
       const slotStartedMono = Date.now();
-      const slotPrompt = buildSlotPrompt(input, slot, imageCount);
+      const slotPrompt = buildSlotPrompt(input, slot, imageCount, imagePrompts);
       const requestBody = { model, prompt: slotPrompt, size, oversea };
       const referenceImageSent = appendReferenceImage(requestBody, referenceImage);
 
@@ -375,7 +410,7 @@ module.exports = async function handler(req, res) {
         estimatedUnits: providerRes.ok ? 1 : 0,
         errorCode: providerRes.ok ? "" : String(payload?.error?.code || payload?.code || providerRes.status),
         errorMessage: providerRes.ok ? "" : String(payload?.error?.message || payload?.message || responseText).slice(0, 500),
-        rawUsage: { image_count: images.length, task_id: taskId || null, slot, image_count_requested: imageCount },
+        rawUsage: { image_count: images.length, task_id: taskId || null, slot, image_count_requested: imageCount, per_image_prompt_count: imagePrompts.length },
         metadata: {
           source: "web_image_generation_workflow",
           provider: "duomiapi",
@@ -387,6 +422,8 @@ module.exports = async function handler(req, res) {
           reference_image_sent: referenceImageSent,
           prompt_chars: slotPrompt.length,
           image_count_requested: imageCount,
+          per_image_prompt_count: imagePrompts.length,
+          unified_visual_style: input.unifiedVisualStyle !== false,
           slot,
           user_id: user.user_id,
         },

@@ -2589,6 +2589,16 @@ tbody tr:hover {
   padding: 0 10px 10px;
 }
 
+.image-prompt-editor {
+  display: grid;
+  gap: 2px;
+}
+
+.image-slot-prompt-list {
+  display: grid;
+  gap: 2px;
+}
+
 .image-prompt-summary {
   display: block;
   min-height: 54px;
@@ -2609,7 +2619,7 @@ tbody tr:hover {
 }
 
 .image-generation-options {
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
 }
 
 .image-reference-upload {
@@ -2642,6 +2652,28 @@ tbody tr:hover {
   inset: 0;
   opacity: 0;
   cursor: pointer;
+}
+
+.image-style-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 820;
+  white-space: nowrap;
+}
+
+.image-style-toggle input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--teal);
 }
 
 .image-reference-preview {
