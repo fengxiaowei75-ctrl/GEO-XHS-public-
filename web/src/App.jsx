@@ -17,6 +17,7 @@ import {
   ListChecks,
   LogOut,
   MessageCircle,
+  PencilLine,
   RefreshCcw,
   Save,
   Search,
@@ -1388,16 +1389,69 @@ function imageTaskStatusLabel(status) {
   return labels[status] || status || "生成中";
 }
 
+function imageResultGroupId(result) {
+  if (result?.groupId) return result.groupId;
+  if (result?.taskIds?.length) return result.taskIds.join("|");
+  if (result?.taskId) return result.taskId;
+  const imageKey = (result?.images || []).map((image) => image?.url).filter(Boolean).join("|");
+  return imageKey || "";
+}
+
 function wait(ms) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
   });
 }
 
+function normalizeResultImage(image, fallbackSlot, fallbackVersion = 1) {
+  if (!image?.url) return null;
+  const slot = normalizeWorkflowImageCount(image.slot || fallbackSlot || 1);
+  return {
+    id: image.id || `image-${slot}-${fallbackVersion}`,
+    url: image.url,
+    slot,
+    version: Number(image.version || fallbackVersion),
+    taskId: image.taskId || "",
+    editedAt: image.editedAt || "",
+    editInstruction: image.editInstruction || "",
+  };
+}
+
+function dedupeImageVersions(images) {
+  const seen = new Set();
+  return images.filter((image) => {
+    if (!image?.url || seen.has(image.url)) return false;
+    seen.add(image.url);
+    return true;
+  });
+}
+
+function imageVersionsForSlot(result, slot) {
+  const fallbackSlot = normalizeWorkflowImageCount(slot);
+  const collected = [];
+  (result?.tasks || []).forEach((task) => {
+    (task.images || []).forEach((image, index) => {
+      const normalized = normalizeResultImage({ ...image, taskId: image.taskId || task.taskId }, task.slot || fallbackSlot, index + 1);
+      if (normalized?.slot === fallbackSlot) collected.push(normalized);
+    });
+  });
+  (result?.images || []).forEach((image, index) => {
+    const normalized = normalizeResultImage(image, image.slot || index + 1, index + 1);
+    if (normalized?.slot === fallbackSlot) collected.push(normalized);
+  });
+  return dedupeImageVersions(collected).map((image, index) => ({ ...image, version: index + 1 }));
+}
+
+function allImageVersions(result) {
+  return Array.from({ length: maxWorkflowImages }, (_, index) => imageVersionsForSlot(result, index + 1)).flat();
+}
+
 function imageSlotItems(result) {
   const slots = Array.from({ length: maxWorkflowImages }, (_, index) => ({
     slot: index + 1,
     image: null,
+    versions: [],
+    versionCount: 0,
     status: "empty",
   }));
   (result?.tasks || []).forEach((task) => {
@@ -1405,21 +1459,91 @@ function imageSlotItems(result) {
     if (slotIndex >= 0 && slotIndex < maxWorkflowImages) {
       slots[slotIndex].status = task.status || result?.status || "processing";
       slots[slotIndex].taskId = task.taskId;
-      if (task.images?.[0]) slots[slotIndex].image = { ...task.images[0], slot: slotIndex + 1 };
     }
   });
-  (result?.images || []).forEach((image, index) => {
-    const slotIndex = Math.max(0, Math.min(maxWorkflowImages - 1, Number(image.slot || index + 1) - 1));
-    if (!slots[slotIndex].image) slots[slotIndex].image = { ...image, slot: slotIndex + 1 };
-    slots[slotIndex].status = "succeeded";
+  slots.forEach((slot) => {
+    const versions = imageVersionsForSlot(result, slot.slot);
+    if (!versions.length) return;
+    slot.versions = versions;
+    slot.versionCount = versions.length;
+    slot.image = versions[versions.length - 1];
+    slot.status = "succeeded";
   });
   return slots;
 }
 
 function generatedImagesForSave(result) {
-  return imageSlotItems(result)
-    .filter((slot) => slot.image?.url)
-    .map((slot) => ({ slot: slot.slot, url: slot.image.url }));
+  return allImageVersions(result).map((image) => ({
+    slot: image.slot,
+    version: image.version,
+    url: image.url,
+    editedAt: image.editedAt || "",
+    editInstruction: image.editInstruction || "",
+  }));
+}
+
+function buildImageEditPrompt({ slot, originalPrompt, instruction }) {
+  return [
+    "【改图任务】",
+    `这是对当前组图第${slot}张已有产出进行改图，不是重新生成整组。随请求传入的垫图/参考图就是当前渲染框里的图片结果。`,
+    "请以当前图片结果为基础，只执行用户本次修改点；没有提到的主体、构图、信息层级、风格、配色、字体气质和已经正确的文字尽量保留。",
+    "不要复制其他图片的内容模块，不要把第1张/封面逻辑套到这张图上。",
+    "",
+    "【当前图原始提示词】",
+    originalPrompt || "暂无逐图原始提示词，请参考全局内容资产和当前图片结果。",
+    "",
+    "【用户本次修改点】",
+    instruction,
+  ].join("\n");
+}
+
+function appendEditedSlotImage(currentResult, slot, editResult, editImage, editInstruction, latencyMs) {
+  const targetSlot = normalizeWorkflowImageCount(slot);
+  const groupId = imageResultGroupId(currentResult) || imageResultGroupId(editResult) || `image-group-${Date.now()}`;
+  const existingVersions = imageVersionsForSlot(currentResult, targetSlot);
+  const nextVersion = existingVersions.length + 1;
+  const taskId = editResult?.taskIds?.[0] || editResult?.taskId || editImage?.taskId || "";
+  const nextImage = {
+    ...editImage,
+    id: editImage?.id || `slot-${targetSlot}-v${nextVersion}`,
+    slot: targetSlot,
+    version: nextVersion,
+    taskId,
+    editedAt: new Date().toISOString(),
+    editInstruction,
+  };
+  const currentTasks = Array.isArray(currentResult?.tasks) ? currentResult.tasks : [];
+  const taskFound = currentTasks.some((task) => Number(task.slot) === targetSlot);
+  const tasks = currentTasks.map((task) => {
+    if (Number(task.slot) !== targetSlot) return task;
+    return {
+      ...task,
+      taskId: task.taskId || taskId,
+      status: "succeeded",
+      images: dedupeImageVersions([...(task.images || []), nextImage]),
+    };
+  });
+  if (!taskFound) {
+    tasks.push({ slot: targetSlot, taskId, status: "succeeded", images: [nextImage] });
+  }
+  const images = dedupeImageVersions([...(currentResult?.images || []), nextImage]);
+  const taskIds = Array.from(new Set([...(currentResult?.taskIds || []), ...(editResult?.taskIds || [])].filter(Boolean)));
+  const prompts = [currentResult?.prompt, `--- 第${targetSlot}张改图发送提示词 ---\n${editResult?.prompt || ""}`].filter(Boolean).join("\n\n");
+  return {
+    ...(currentResult || {}),
+    ok: true,
+    groupId,
+    taskId: currentResult?.taskId || editResult?.taskId || "",
+    taskIds,
+    tasks,
+    images,
+    status: "succeeded",
+    model: currentResult?.model || editResult?.model || "",
+    size: currentResult?.size || editResult?.size || "",
+    prompt: prompts.slice(0, 60000),
+    latencyMs,
+    logWarning: [currentResult?.logWarning, editResult?.logWarning].filter(Boolean).join("；"),
+  };
 }
 
 function downloadBlob(blob, fallbackFilename) {
@@ -1485,20 +1609,31 @@ function compactImageResult(result) {
     slot: Number(task.slot || 0),
     taskId: task.taskId || "",
     status: task.status || "",
-    images: (task.images || [])
+    images: dedupeImageVersions(task.images || [])
       .filter((image) => image?.url)
-      .slice(0, 1)
-      .map((image) => ({ id: image.id, url: image.url, slot: Number(image.slot || task.slot || 0) })),
+      .map((image, index) => ({
+        id: image.id,
+        url: image.url,
+        slot: Number(image.slot || task.slot || 0),
+        version: Number(image.version || index + 1),
+        taskId: image.taskId || task.taskId || "",
+        editedAt: image.editedAt || "",
+        editInstruction: image.editInstruction || "",
+      })),
   }));
-  const topLevelImages = (result?.images || []).filter((image) => image?.url);
-  const sourceImages = topLevelImages.length ? topLevelImages : tasks.flatMap((task) => task.images || []);
-  const images = sourceImages.slice(0, maxWorkflowImages).map((image, index) => ({
+  const sourceImages = (result?.images || []).filter((image) => image?.url).length ? result.images : tasks.flatMap((task) => task.images || []);
+  const images = dedupeImageVersions(sourceImages || []).map((image, index) => ({
     id: image.id || `history-image-${index}`,
     url: image.url,
     slot: Number(image.slot || index + 1),
+    version: Number(image.version || index + 1),
+    taskId: image.taskId || "",
+    editedAt: image.editedAt || "",
+    editInstruction: image.editInstruction || "",
   }));
   return {
     ok: true,
+    groupId: imageResultGroupId(result),
     taskId: result?.taskId || "",
     taskIds: result?.taskIds || [],
     tasks,
@@ -1556,6 +1691,9 @@ function ImageGenerationWorkflow({ data }) {
   const [historyItems, setHistoryItems] = useState(initialHistory);
   const [promptOpen, setPromptOpen] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
+  const [editingSlot, setEditingSlot] = useState(null);
+  const [editInstruction, setEditInstruction] = useState("");
+  const [editingImage, setEditingImage] = useState(false);
   const noteOptions = useMemo(
     () =>
       noteRows.slice(0, 300).map((item) => ({
@@ -1589,7 +1727,7 @@ function ImageGenerationWorkflow({ data }) {
   function persistHistoryItem(nextResult, nextSocialDraft = socialDraft) {
     const compactResult = compactImageResult(nextResult);
     if (!generatedImagesForSave(compactResult).length) return;
-    const taskKey = compactResult.taskIds?.length ? compactResult.taskIds.join("|") : compactResult.taskId || compactResult.images.map((image) => image.url).join("|");
+    const taskKey = imageResultGroupId(compactResult) || compactResult.images.map((image) => image.url).join("|");
     const item = {
       id: taskKey || `history-${Date.now()}`,
       createdAt: new Date().toISOString(),
@@ -1599,7 +1737,9 @@ function ImageGenerationWorkflow({ data }) {
       socialDraft: compactSocialDraft(nextSocialDraft),
     };
     setHistoryItems((current) => {
-      const next = [item, ...current.filter((historyItem) => historyItem.id !== item.id)].slice(0, maxImageWorkflowHistory);
+      const existing = current.find((historyItem) => historyItem.id === item.id);
+      const mergedItem = existing ? { ...item, createdAt: existing.createdAt || item.createdAt, updatedAt: item.createdAt } : item;
+      const next = [mergedItem, ...current.filter((historyItem) => historyItem.id !== item.id)].slice(0, maxImageWorkflowHistory);
       writeImageWorkflowHistory(next);
       return next;
     });
@@ -1610,6 +1750,8 @@ function ImageGenerationWorkflow({ data }) {
     setResult(item.result || null);
     setSocialPlatform(item.socialPlatform || item.socialDraft?.platform || "xhs");
     setSocialDraft(item.socialDraft || null);
+    setEditingSlot(null);
+    setEditInstruction("");
     setMessage("已恢复历史图片");
     setSocialMessage(item.socialDraft?.content ? "已恢复历史社媒草稿" : "");
   }
@@ -1664,6 +1806,105 @@ function ImageGenerationWorkflow({ data }) {
     reader.readAsDataURL(file);
   }
 
+  function openImageEdit(slot) {
+    setEditingSlot(slot);
+    setEditInstruction("");
+    setMessage("");
+  }
+
+  async function editGeneratedImage(event) {
+    event.preventDefault();
+    const slot = normalizeWorkflowImageCount(editingSlot);
+    const instruction = editInstruction.trim();
+    const sourceSlot = imageSlotItems(result).find((item) => item.slot === slot);
+    const sourceImage = sourceSlot?.image;
+    if (!sourceImage?.url) {
+      setMessage("请先生成当前图片后再改图");
+      return;
+    }
+    if (!instruction) {
+      setMessage("请填写这次要修改的点");
+      return;
+    }
+
+    const startedAt = Date.now();
+    const originalPrompt = imagePromptAt(form, slot) || form.imagePrompt || "";
+    const editPrompt = buildImageEditPrompt({ slot, originalPrompt, instruction });
+    setEditingImage(true);
+    setMessage(`第${slot}张改图任务创建中`);
+    try {
+      const payload = await requestJson("/api/image-generate", {
+        method: "POST",
+        body: JSON.stringify({
+          noteId: form.noteId.trim(),
+          title: form.title,
+          content: form.content,
+          targetPersona: form.targetPersona,
+          userPain: form.userPain,
+          businessLogic: form.businessLogic,
+          businessKnowledge: form.businessKnowledge,
+          imagePrompt: form.imagePrompt,
+          imagePrompts: [{ slot: 1, prompt: editPrompt }],
+          unifiedVisualStyle: form.unifiedVisualStyle !== false,
+          referenceImage: sourceImage.url,
+          workflowAction: "image_edit",
+          editSlot: slot,
+          size: form.size,
+          imageCount: 1,
+        }),
+      });
+      let editImages = (payload.images || []).map((image) => ({ ...image, slot }));
+      let taskState = (payload.tasks?.length ? payload.tasks : [{ slot, taskId: payload.taskId, images: editImages }]).map((task) => ({
+        slot,
+        taskId: task.taskId,
+        status: task.images?.length ? "succeeded" : "processing",
+        images: (task.images || []).map((image) => ({ ...image, slot })),
+      }));
+
+      if (!editImages.length) {
+        if (!taskState.some((task) => task.taskId)) throw new Error("改图任务创建成功，但没有返回任务 ID");
+        setMessage(`第${slot}张改图生成中`);
+        for (let attempt = 0; attempt < 60; attempt += 1) {
+          await wait(attempt === 0 ? 1600 : 3000);
+          const task = taskState[0];
+          if (!task?.taskId) continue;
+          const taskPayload = await requestJson(`/api/image-task?taskId=${encodeURIComponent(task.taskId)}`);
+          taskState = [
+            {
+              ...task,
+              status: taskPayload.status,
+              images: (taskPayload.images || []).map((image) => ({ ...image, slot })),
+            },
+          ];
+          editImages = taskState[0].images || [];
+          if (taskPayload.status === "failed") throw new Error(taskPayload.error || `第${slot}张改图失败`);
+          if (editImages.length) break;
+          setMessage(`第${slot}张${imageTaskStatusLabel(taskPayload.status)}`);
+        }
+      }
+
+      const editImage = editImages[0];
+      if (!editImage?.url) throw new Error("改图任务仍在处理中，请稍后重试");
+      const editResult = {
+        ...payload,
+        tasks: taskState,
+        images: editImages,
+        status: "succeeded",
+        latencyMs: Date.now() - startedAt,
+      };
+      const nextResult = appendEditedSlotImage(result, slot, editResult, editImage, instruction, Date.now() - startedAt);
+      setResult(nextResult);
+      persistHistoryItem(nextResult);
+      setEditingSlot(null);
+      setEditInstruction("");
+      setMessage(payload.logWarning ? `第${slot}张已改图，监控日志写入提示：${payload.logWarning}` : `第${slot}张已改图并写入监控日志`);
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setEditingImage(false);
+    }
+  }
+
   async function generateImage(event) {
     event.preventDefault();
     if (!hasWorkflowPrompt(form)) {
@@ -1676,6 +1917,8 @@ function ImageGenerationWorkflow({ data }) {
     setGenerating(true);
     setMessage("");
     setResult(null);
+    setEditingSlot(null);
+    setEditInstruction("");
     try {
       const payload = await requestJson("/api/image-generate", {
         method: "POST",
@@ -1979,26 +2222,65 @@ function ImageGenerationWorkflow({ data }) {
           {imageSlotItems(result).map((slot) => {
             const active = slot.slot <= normalizeWorkflowImageCount(form.imageCount);
             return (
-              <button
-                className={`image-result-slot ${slot.image?.url ? "has-image" : ""} ${active ? "active" : ""}`}
-                type="button"
-                key={slot.slot}
-                onClick={() => (slot.image?.url ? setPreviewImage(slot.image) : null)}
-                disabled={!slot.image?.url}
-              >
+              <div className={`image-result-card ${active ? "active" : ""}`} key={slot.slot}>
+                <button
+                  className={`image-result-slot ${slot.image?.url ? "has-image" : ""} ${active ? "active" : ""}`}
+                  type="button"
+                  onClick={() => (slot.image?.url ? setPreviewImage(slot.image) : null)}
+                  disabled={!slot.image?.url}
+                >
+                  {slot.image?.url ? (
+                    <img src={slot.image.url} alt={`生成结果 ${slot.slot}`} />
+                  ) : (
+                    <span>
+                      <ImagePlus size={24} />
+                      <strong>图片 {slot.slot}</strong>
+                      <em>{generating && active ? imageTaskStatusLabel(slot.status === "empty" ? "processing" : slot.status) : active ? "等待生成" : "空位"}</em>
+                    </span>
+                  )}
+                </button>
                 {slot.image?.url ? (
-                  <img src={slot.image.url} alt={`生成结果 ${slot.slot}`} />
-                ) : (
-                  <span>
-                    <ImagePlus size={24} />
-                    <strong>图片 {slot.slot}</strong>
-                    <em>{generating && active ? imageTaskStatusLabel(slot.status === "empty" ? "processing" : slot.status) : active ? "等待生成" : "空位"}</em>
-                  </span>
-                )}
-              </button>
+                  <div className="image-slot-actions">
+                    <button className="copy-button" type="button" onClick={() => openImageEdit(slot.slot)} disabled={editingImage || generating}>
+                      <PencilLine size={14} />
+                      改图
+                    </button>
+                    <span>{slot.versionCount > 1 ? `版本 ${slot.versionCount}` : "原图版本"}</span>
+                  </div>
+                ) : null}
+              </div>
             );
           })}
         </div>
+        {editingSlot ? (
+          <form className="image-edit-panel" onSubmit={editGeneratedImage}>
+            <div className="image-edit-head">
+              <strong>修改第{editingSlot}张</strong>
+              <button
+                className="copy-button"
+                type="button"
+                onClick={() => {
+                  setEditingSlot(null);
+                  setEditInstruction("");
+                }}
+                disabled={editingImage}
+              >
+                取消
+              </button>
+            </div>
+            <textarea
+              value={editInstruction}
+              onChange={(event) => setEditInstruction(event.target.value)}
+              placeholder="只写这次要改的点，例如：把标题换成更短的反常识表达，保留当前配色和版式"
+              rows={4}
+            />
+            <div className="image-edit-actions">
+              <button className="primary-button" type="submit" disabled={editingImage}>
+                {editingImage ? "改图中" : "确认改图"}
+              </button>
+            </div>
+          </form>
+        ) : null}
         {result ? (
           <>
             <div className="image-result-meta">
@@ -2034,9 +2316,10 @@ function ImageGenerationWorkflow({ data }) {
                     </div>
                   </div>
                   <div className="image-history-thumbs">
-                    {generatedImagesForSave(item.result).map((image) => (
-                      <button type="button" key={`${item.id}-${image.slot}`} onClick={() => setPreviewImage(image)}>
-                        <img src={image.url} alt={`历史图片 ${image.slot}`} />
+                    {generatedImagesForSave(item.result).map((image, index) => (
+                      <button type="button" key={`${item.id}-${image.slot}-${image.version}-${index}`} onClick={() => setPreviewImage(image)}>
+                        <img src={image.url} alt={`历史图片 ${image.slot}-${image.version}`} />
+                        <span>{image.version > 1 ? `${image.slot}-${image.version}` : image.slot}</span>
                       </button>
                     ))}
                   </div>

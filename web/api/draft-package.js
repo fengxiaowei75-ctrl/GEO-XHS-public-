@@ -6,7 +6,7 @@ const platformLabels = {
   wechat: "公众号",
   zhihu: "知乎",
 };
-const MAX_WORKFLOW_IMAGES = 10;
+const MAX_DRAFT_IMAGES = 80;
 const MAX_IMAGE_PROMPT_CHARS = 60000;
 
 function sendJson(res, statusCode, payload) {
@@ -56,6 +56,9 @@ function datePrefix(value) {
 }
 
 function markdownFor(input, platformLabel) {
+  const imageRows = Array.isArray(input.images)
+    ? input.images.slice(0, MAX_DRAFT_IMAGES).map((image, index) => `- images/${imageFileStem(image, index)}`)
+    : [];
   return [
     `# ${cleanText(input.title, 200) || "社媒草稿"}`,
     "",
@@ -97,9 +100,17 @@ function markdownFor(input, platformLabel) {
     "",
     "## 图片文件",
     "",
-    Array.isArray(input.images) && input.images.length ? input.images.map((_, index) => `- images/image-${index + 1}`).join("\n") : "暂无",
+    imageRows.length ? imageRows.join("\n") : "暂无",
     "",
   ].join("\n");
+}
+
+function imageFileStem(image, index) {
+  const slot = Number(image?.slot || 0);
+  const version = Number(image?.version || 0);
+  if (slot > 0 && version > 0) return `slot-${slot}-v${version}`;
+  if (slot > 0) return `slot-${slot}-v1`;
+  return `image-${index + 1}`;
 }
 
 function makeCrcTable() {
@@ -262,6 +273,16 @@ module.exports = async function handler(req, res) {
             businessKnowledge: cleanText(input.businessKnowledge, 6000),
             imagePrompt: cleanText(input.imagePrompt, MAX_IMAGE_PROMPT_CHARS),
             socialContent: cleanText(input.socialContent, 20000),
+            images: Array.isArray(input.images)
+              ? input.images.slice(0, MAX_DRAFT_IMAGES).map((image, index) => ({
+                  slot: Number(image?.slot || 0) || null,
+                  version: Number(image?.version || 0) || null,
+                  filenameStem: imageFileStem(image, index),
+                  url: cleanText(image?.url || image, 4000),
+                  editedAt: cleanText(image?.editedAt, 80),
+                  editInstruction: cleanText(image?.editInstruction, 1200),
+                }))
+              : [],
             generatedAt: cleanText(input.producedAt, 80) || new Date().toISOString(),
             savedBy: user.user_id,
           },
@@ -272,16 +293,17 @@ module.exports = async function handler(req, res) {
     ];
 
     const imageLinks = [];
-    const images = Array.isArray(input.images) ? input.images.slice(0, MAX_WORKFLOW_IMAGES) : [];
+    const images = Array.isArray(input.images) ? input.images.slice(0, MAX_DRAFT_IMAGES) : [];
     for (let index = 0; index < images.length; index += 1) {
       const url = cleanText(images[index]?.url || images[index], 4000);
       if (!url) continue;
-      imageLinks.push(`image-${index + 1}: ${url}`);
+      const stem = imageFileStem(images[index], index);
+      imageLinks.push(`${stem}: ${url}`);
       try {
         const image = await fetchImage(url);
-        entries.push({ name: `${folder}/images/image-${index + 1}.${image.extension}`, data: image.data });
+        entries.push({ name: `${folder}/images/${stem}.${image.extension}`, data: image.data });
       } catch (error) {
-        imageLinks.push(`image-${index + 1} 下载失败：${error.message}`);
+        imageLinks.push(`${stem} 下载失败：${error.message}`);
       }
     }
     entries.push({ name: `${folder}/image-links.txt`, data: `${imageLinks.join("\n")}\n` });

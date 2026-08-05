@@ -2743,6 +2743,12 @@ tbody tr:hover {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.image-result-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
 .image-result-slot {
   display: block;
   width: 100%;
@@ -2798,6 +2804,65 @@ tbody tr:hover {
   color: var(--muted);
   font-size: 12px;
   font-style: normal;
+}
+
+.image-slot-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+}
+
+.image-slot-actions .copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 10px;
+}
+
+.image-slot-actions span {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.image-edit-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #dfe8de;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.image-edit-head,
+.image-edit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.image-edit-head strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.image-edit-panel textarea {
+  width: 100%;
+  min-height: 96px;
+  padding: 10px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  line-height: 1.5;
 }
 
 .image-result-stage a {
@@ -2959,6 +3024,7 @@ tbody tr:hover {
 }
 
 .image-history-thumbs button {
+  position: relative;
   display: block;
   min-width: 0;
   aspect-ratio: 1 / 1;
@@ -2975,6 +3041,20 @@ tbody tr:hover {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.image-history-thumbs span {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  min-width: 22px;
+  padding: 2px 5px;
+  border-radius: 6px;
+  background: rgba(16, 27, 24, 0.76);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 850;
+  line-height: 1.2;
 }
 
 .image-history-empty {

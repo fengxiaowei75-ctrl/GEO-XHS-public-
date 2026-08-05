@@ -392,6 +392,9 @@ module.exports = async function handler(req, res) {
     const prompt = buildPromptPreview(input, imageCount, imagePrompts);
     const noteId = cleanText(input.noteId, 120);
     const referenceImage = cleanText(input.referenceImage, 10 * 1024 * 1024);
+    const workflowAction = cleanText(input.workflowAction, 64) || "image_generation";
+    const operation = workflowAction === "image_edit" ? "image_generation_edit_task" : "image_generation_create_task";
+    const editSlot = Number(input.editSlot || 0) || null;
 
     if (!apiKey) {
       sendJson(res, 500, { ok: false, error: "服务端缺少 IMAGE_GENERATION_API_KEY" });
@@ -443,6 +446,7 @@ module.exports = async function handler(req, res) {
         traceId: `web:image-generation:${Date.now()}:${slot}`,
         modelConfigId: modelConfig.model_config_id,
         credentialId: modelConfig.credential_id,
+        operation,
         status: providerRes.ok ? "success" : "failed",
         requestHost: endpoint.host,
         requestPath: endpoint.pathname,
@@ -456,10 +460,11 @@ module.exports = async function handler(req, res) {
         estimatedUnits: providerRes.ok ? 1 : 0,
         errorCode: providerRes.ok ? "" : String(payload?.error?.code || payload?.code || providerRes.status),
         errorMessage: providerRes.ok ? "" : String(payload?.error?.message || payload?.message || responseText).slice(0, 500),
-        rawUsage: { image_count: images.length, task_id: taskId || null, slot, image_count_requested: imageCount, per_image_prompt_count: imagePrompts.length },
+        rawUsage: { image_count: images.length, task_id: taskId || null, slot, image_count_requested: imageCount, per_image_prompt_count: imagePrompts.length, workflow_action: workflowAction },
         metadata: {
           source: "web_image_generation_workflow",
           provider: "duomiapi",
+          workflow_action: workflowAction,
           model,
           size,
           oversea,
@@ -471,6 +476,7 @@ module.exports = async function handler(req, res) {
           per_image_prompt_count: imagePrompts.length,
           unified_visual_style: input.unifiedVisualStyle !== false,
           slot,
+          edit_slot: editSlot,
           user_id: user.user_id,
         },
       });
