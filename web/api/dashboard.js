@@ -906,6 +906,7 @@ module.exports = async function handler(req, res) {
             WHEN 'volcengine_ark_chat' THEN 3
             WHEN 'kimi_chat' THEN 4
             WHEN 'volcengine_ark_embedding' THEN 5
+            WHEN 'volcengine_ark_image_generation' THEN 6
             ELSE 20
           END,
           calls_total DESC,
@@ -1004,7 +1005,7 @@ module.exports = async function handler(req, res) {
         FROM public.geo_ops_api_call_logs l
         JOIN public.geo_ops_api_registry r ON r.provider_code = l.provider_code
         LEFT JOIN public.geo_ops_model_configs m ON m.model_config_id = l.model_config_id
-        WHERE r.provider_type IN ('llm_chat', 'llm_vision', 'embedding', 'speech_to_text')
+        WHERE r.provider_type IN ('llm_chat', 'llm_vision', 'embedding', 'speech_to_text', 'image_generation')
         GROUP BY COALESCE(m.model_name, l.provider_code), COALESCE(m.display_name_cn, r.display_name_cn),
           r.provider_code, r.provider_type, m.model_role
         ORDER BY calls_total DESC, model_name

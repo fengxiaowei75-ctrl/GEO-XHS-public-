@@ -11,6 +11,7 @@ import {
   Filter,
   Gauge,
   Heart,
+  ImagePlus,
   KeyRound,
   Layers3,
   ListChecks,
@@ -22,6 +23,7 @@ import {
   Shield,
   Sparkles,
   Target,
+  Upload,
   UserPlus,
   Users,
   XCircle,
@@ -49,6 +51,7 @@ const shortDateFormatter = new Intl.DateTimeFormat("zh-CN", {
 
 const navItems = [
   { id: "content", label: "GEO红书需求洞察", icon: Database, permission: "content" },
+  { id: "imageGen", label: "GEO图生图工作流", icon: ImagePlus, permission: "content" },
   { id: "ops", label: "运行监控", icon: Gauge, permission: "ops" },
   { id: "models", label: "模型配置", icon: KeyRound, permission: "models" },
   { id: "admin", label: "管理员配置", icon: Shield, permission: "admin" },
@@ -60,13 +63,15 @@ const providerLabels = {
   volcengine_ark_vision: "豆包图片解析（首图/子图视觉信息）",
   volcengine_ark_chat: "豆包内容资产总结（痛点/人群/漏斗标签）",
   volcengine_ark_embedding: "豆包 Embedding（内容资产转向量）",
+  volcengine_ark_image_generation: "豆包图像生成/图生图（Seedream）",
   kimi_chat: "Kimi 历史内容资产总结（旧模型记录）",
 };
 const providerChartOrder = new Map(
-  ["endata_xhs_note_detail", "volcengine_ark_vision", "volcengine_ark_chat", "kimi_chat", "volcengine_ark_embedding"].map(
+  ["endata_xhs_note_detail", "volcengine_ark_vision", "volcengine_ark_chat", "kimi_chat", "volcengine_ark_embedding", "volcengine_ark_image_generation"].map(
     (code, index) => [code, index],
   ),
 );
+const modelProviderTypes = ["llm_chat", "llm_vision", "embedding", "speech_to_text", "image_generation"];
 
 function formatNumber(value) {
   if (value === null || value === undefined || value === "") return "-";
@@ -239,6 +244,7 @@ function providerTypeLabel(value) {
     embedding: "Embedding",
     media_fetch: "媒体下载",
     speech_to_text: "视频转录",
+    image_generation: "图像生成",
     other: "其他",
   };
   return labels[value] || value || "-";
@@ -1274,6 +1280,255 @@ function EndataBalancePanel({ endata }) {
           </tbody>
         </table>
       </div>
+    </section>
+  );
+}
+
+const emptyImageWorkflowForm = {
+  noteId: "",
+  title: "",
+  content: "",
+  targetPersona: "",
+  userPain: "",
+  businessLogic: "",
+  businessKnowledge: "",
+  imagePrompt: "",
+  referenceImage: "",
+  referenceImageName: "",
+  size: "2K",
+};
+
+function imageWorkflowFormFromNote(note, current) {
+  return {
+    ...current,
+    noteId: note.note_id || current.noteId,
+    title: note.title || "",
+    content: note.content || "",
+    targetPersona: note.target_persona || "",
+    userPain: note.user_pain || "",
+    businessLogic: note.business_logic || "",
+    businessKnowledge: note.business_knowledge || "",
+    imagePrompt: current.imagePrompt || note.visual_prompt || "",
+  };
+}
+
+function ImageWorkflowField({ label, value, onChange, multiline = true, placeholder = "", rows = 4 }) {
+  return (
+    <label className="image-workflow-field">
+      <span>{label}</span>
+      {multiline ? (
+        <textarea rows={rows} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
+      ) : (
+        <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
+      )}
+    </label>
+  );
+}
+
+function ImageGenerationWorkflow({ data }) {
+  const noteRows = data?.contentInsight?.noteAnalysis || [];
+  const [form, setForm] = useState(emptyImageWorkflowForm);
+  const [loadingNote, setLoadingNote] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [message, setMessage] = useState("");
+  const [result, setResult] = useState(null);
+  const noteOptions = useMemo(
+    () =>
+      noteRows.slice(0, 300).map((item) => ({
+        note_id: item.note_id,
+        label: `${item.note_id} · ${item.title || "未命名笔记"}`,
+      })),
+    [noteRows],
+  );
+
+  function updateForm(patch) {
+    setForm((current) => ({ ...current, ...patch }));
+  }
+
+  async function loadNote() {
+    const noteId = form.noteId.trim();
+    if (!noteId) {
+      setMessage("请先输入或选择 note_id");
+      return;
+    }
+    setLoadingNote(true);
+    setMessage("");
+    try {
+      const payload = await requestJson("/api/image-note", {
+        method: "POST",
+        body: JSON.stringify({ noteId }),
+      });
+      setForm((current) => imageWorkflowFormFromNote(payload.note || {}, current));
+      setMessage(`已读取 ${payload.note?.source || "数据库"} 字段`);
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setLoadingNote(false);
+    }
+  }
+
+  async function handleReferenceImage(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) {
+      setMessage("垫图请控制在 8MB 以内");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      updateForm({
+        referenceImage: String(reader.result || ""),
+        referenceImageName: file.name,
+      });
+    };
+    reader.onerror = () => setMessage("垫图读取失败");
+    reader.readAsDataURL(file);
+  }
+
+  async function generateImage(event) {
+    event.preventDefault();
+    if (!form.imagePrompt.trim()) {
+      setMessage("请填写生图提示词");
+      return;
+    }
+    setGenerating(true);
+    setMessage("");
+    setResult(null);
+    try {
+      const payload = await requestJson("/api/image-generate", {
+        method: "POST",
+        body: JSON.stringify({
+          noteId: form.noteId.trim(),
+          title: form.title,
+          content: form.content,
+          targetPersona: form.targetPersona,
+          userPain: form.userPain,
+          businessLogic: form.businessLogic,
+          businessKnowledge: form.businessKnowledge,
+          imagePrompt: form.imagePrompt,
+          referenceImage: form.referenceImage,
+          size: form.size,
+        }),
+      });
+      setResult(payload);
+      setMessage(payload.logWarning ? `已生成，监控日志写入提示：${payload.logWarning}` : "已生成并写入监控日志");
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  return (
+    <section className="image-workflow-layout">
+      <form className="panel image-workflow-form" onSubmit={generateImage}>
+        <SectionHeader icon={ImagePlus} title="图生图工作流" action={<StatusPill tone="neutral">Seedream</StatusPill>} />
+
+        <div className="image-note-loader">
+          <label>
+            <span>笔记 ID</span>
+            <input
+              list="image-note-options"
+              value={form.noteId}
+              onChange={(event) => updateForm({ noteId: event.target.value })}
+              placeholder="输入 note_id 后读取"
+            />
+          </label>
+          <datalist id="image-note-options">
+            {noteOptions.map((item) => (
+              <option key={item.note_id} value={item.note_id}>
+                {item.label}
+              </option>
+            ))}
+          </datalist>
+          <button className="copy-button" type="button" onClick={loadNote} disabled={loadingNote}>
+            {loadingNote ? "读取中" : "读取"}
+          </button>
+        </div>
+
+        <ImageWorkflowField label="笔记标题" value={form.title} onChange={(value) => updateForm({ title: value })} multiline={false} />
+        <ImageWorkflowField label="笔记文案" value={form.content} onChange={(value) => updateForm({ content: value })} rows={5} />
+        <ImageWorkflowField label="目标人群画像" value={form.targetPersona} onChange={(value) => updateForm({ targetPersona: value })} rows={3} />
+        <ImageWorkflowField label="用户痛点" value={form.userPain} onChange={(value) => updateForm({ userPain: value })} rows={4} />
+        <ImageWorkflowField label="业务逻辑" value={form.businessLogic} onChange={(value) => updateForm({ businessLogic: value })} rows={4} />
+        <ImageWorkflowField label="业务知识点" value={form.businessKnowledge} onChange={(value) => updateForm({ businessKnowledge: value })} rows={4} />
+        <ImageWorkflowField
+          label="生图提示词"
+          value={form.imagePrompt}
+          onChange={(value) => updateForm({ imagePrompt: value })}
+          placeholder="写清图片风格、构图、文字、色彩、信息层级和禁止项"
+          rows={5}
+        />
+
+        <div className="image-reference-row">
+          <label className="image-reference-upload">
+            <Upload size={16} />
+            <span>{form.referenceImageName || "上传垫图"}</span>
+            <input accept="image/*" type="file" onChange={handleReferenceImage} />
+          </label>
+          <SelectControl
+            value={form.size}
+            onChange={(value) => updateForm({ size: value })}
+            label="尺寸"
+            options={[
+              { value: "2K", label: "2K" },
+              { value: "4K", label: "4K" },
+              { value: "1024x1024", label: "1024x1024" },
+            ]}
+          />
+        </div>
+
+        {form.referenceImage ? (
+          <div className="image-reference-preview">
+            <img src={form.referenceImage} alt="垫图预览" />
+            <button className="copy-button" type="button" onClick={() => updateForm({ referenceImage: "", referenceImageName: "" })}>
+              移除垫图
+            </button>
+          </div>
+        ) : null}
+
+        <div className="image-workflow-actions">
+          <button className="primary-button" type="submit" disabled={generating}>
+            {generating ? "生成中" : "确认并生图"}
+          </button>
+          <button className="copy-button" type="button" onClick={() => setForm(emptyImageWorkflowForm)} disabled={generating}>
+            清空
+          </button>
+        </div>
+        {message ? <div className={result?.ok ? "admin-message" : "admin-message image-workflow-message"}>{message}</div> : null}
+      </form>
+
+      <section className="panel image-workflow-output">
+        <SectionHeader icon={Sparkles} title="生成结果" action={result?.model ? <StatusPill tone="green">{result.model}</StatusPill> : null} />
+        {generating ? (
+          <div className="image-result-loading">生成中</div>
+        ) : result?.images?.length ? (
+          <>
+            <div className="image-result-stage">
+              {result.images.map((image) => (
+                <a href={image.url} target="_blank" rel="noreferrer" key={image.id}>
+                  <img src={image.url} alt="生成结果" />
+                </a>
+              ))}
+            </div>
+            <div className="image-result-meta">
+              <span>尺寸 {result.size}</span>
+              <span>耗时 {formatDuration(result.latencyMs)}</span>
+              <span>{result.logWarning ? "监控日志待补" : "监控日志已写入"}</span>
+            </div>
+            <div className="image-prompt-preview">
+              <strong>发送给模型的提示词</strong>
+              <pre>{result.prompt}</pre>
+            </div>
+          </>
+        ) : (
+          <div className="image-result-empty">
+            <ImagePlus size={28} />
+            <strong>等待生成图片</strong>
+            <span>左侧填写字段或读取笔记后，上传垫图并点击确认并生图。</span>
+          </div>
+        )}
+      </section>
     </section>
   );
 }
@@ -2611,7 +2866,7 @@ function OpsDashboard({ data, apiDate, onApiDateChange }) {
     { value: "all", label: "全部 API" },
     ...apiRows.map((item) => ({ value: item.provider_code, label: providerDisplayName(item) })),
   ];
-  const modelRows = (ops.modelUsageSummary || []).filter((item) => ["llm_chat", "llm_vision", "embedding", "speech_to_text"].includes(item.provider_type));
+  const modelRows = (ops.modelUsageSummary || []).filter((item) => modelProviderTypes.includes(item.provider_type));
   const modelOptions = [
     { value: "all", label: "全部模型" },
     ...Array.from(new Map(modelRows.map((item) => [item.model_name, { value: item.model_name, label: modelDisplayName(item) }])).values()),
@@ -2622,11 +2877,11 @@ function OpsDashboard({ data, apiDate, onApiDateChange }) {
     new Map(providerBaseRows.map((item) => [item.provider_code, { id: item.provider_code, label: item.provider_label }])).values(),
   );
   const modelUsage = usageRows.filter((item) => {
-    const isModel = ["llm_chat", "llm_vision", "embedding", "speech_to_text"].includes(item.provider_type);
+    const isModel = modelProviderTypes.includes(item.provider_type);
     return isModel && (model === "all" || item.model_name === model);
   });
   const modelBaseRows = monthRows.filter((item) => {
-    const isModel = ["llm_chat", "llm_vision", "embedding", "speech_to_text"].includes(item.provider_type);
+    const isModel = modelProviderTypes.includes(item.provider_type);
     return isModel && item.model_name && (model === "all" || item.model_name === model);
   });
   const modelSeriesDomain = Array.from(
@@ -2891,7 +3146,7 @@ function ModelConfigView({ data }) {
   return (
     <>
       <section className="stats-grid stats-grid-three">
-        <Stat icon={Brain} label="模型配置" value={formatNumber((ops.modelConfigs || []).length)} sub="豆包 chat / vision / embedding" />
+        <Stat icon={Brain} label="模型配置" value={formatNumber((ops.modelConfigs || []).length)} sub="豆包 chat / vision / embedding / image" />
         <Stat icon={KeyRound} label="Key 元数据" value={formatNumber((ops.credentials || []).length)} sub="只展示 secret_ref 和 mask" tone="teal" />
         <Stat icon={Gauge} label="限流规则" value={formatNumber((ops.rateLimitRules || []).length)} sub="provider / model / key" tone="amber" />
       </section>
@@ -3445,6 +3700,7 @@ export default function App() {
               onContentRangeApply={handleContentRangeApply}
             />
           ) : null}
+          {activeView === "imageGen" ? <ImageGenerationWorkflow data={data} /> : null}
           {activeView === "ops" ? <OpsDashboard data={data} apiDate={apiDate} onApiDateChange={handleApiDateChange} /> : null}
           {activeView === "models" ? <ModelConfigView data={data} /> : null}
           {activeView === "admin" ? <AdminConfigView currentUser={currentUser} permissionCatalog={permissionCatalog} /> : null}
