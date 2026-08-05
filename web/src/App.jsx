@@ -51,8 +51,9 @@ const shortDateFormatter = new Intl.DateTimeFormat("zh-CN", {
 });
 
 const navItems = [
-  { id: "content", label: "GEO红书需求洞察", icon: Database, permission: "content" },
-  { id: "imageGen", label: "GEO图生图工作流", icon: ImagePlus, permission: "content" },
+  { id: "content", label: "市场需求洞察", icon: Database, permission: "content" },
+  { id: "imageGen", label: "爆文洗稿流", icon: ImagePlus, permission: "content" },
+  { id: "fixedContent", label: "固定内容流", icon: Layers3, permission: "content" },
   { id: "ops", label: "运行监控", icon: Gauge, permission: "ops" },
   { id: "models", label: "模型配置", icon: KeyRound, permission: "models" },
   { id: "admin", label: "管理员配置", icon: Shield, permission: "admin" },
@@ -2149,7 +2150,7 @@ function ImageGenerationWorkflow({ data }) {
   return (
     <section className="image-workflow-layout">
       <form className="panel image-workflow-form" onSubmit={generateImage}>
-        <SectionHeader icon={ImagePlus} title="图生图工作流" action={<StatusPill tone="neutral">gpt-image-2</StatusPill>} />
+        <SectionHeader icon={ImagePlus} title="爆文洗稿流" action={<StatusPill tone="neutral">gpt-image-2</StatusPill>} />
 
         <div className="image-note-loader">
           <label>
@@ -2431,6 +2432,23 @@ function ImageGenerationWorkflow({ data }) {
           </div>
         </div>
       ) : null}
+    </section>
+  );
+}
+
+function FixedContentFlow() {
+  return (
+    <section className="fixed-content-flow">
+      <section className="panel">
+        <SectionHeader icon={Layers3} title="固定内容流" action={<StatusPill tone="neutral">Content</StatusPill>} />
+        <div className="fixed-content-board">
+          <div className="fixed-content-empty">
+            <Layers3 size={28} />
+            <strong>固定内容流</strong>
+            <span>待接入固定内容生产配置</span>
+          </div>
+        </div>
+      </section>
     </section>
   );
 }
@@ -4607,6 +4625,7 @@ export default function App() {
               <ImageGenerationWorkflow data={data} />
             </div>
           ) : null}
+          {activeView === "fixedContent" ? <FixedContentFlow /> : null}
           {activeView === "ops" ? <OpsDashboard data={data} apiDate={apiDate} onApiDateChange={handleApiDateChange} /> : null}
           {activeView === "models" ? <ModelConfigView data={data} /> : null}
           {activeView === "admin" ? <AdminConfigView currentUser={currentUser} permissionCatalog={permissionCatalog} /> : null}
