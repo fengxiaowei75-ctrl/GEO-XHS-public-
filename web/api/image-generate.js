@@ -71,9 +71,13 @@ function parseBoolean(value, fallback = false) {
   return ["1", "true", "yes", "y"].includes(String(value).trim().toLowerCase());
 }
 
+function normalizeImageCount(value) {
+  return Number(value) === 4 ? 4 : 1;
+}
+
 function buildPrompt(input) {
   return [
-    "请基于下面的小红书笔记内容资产和垫图要求，生成一张适合作为GEO内容运营素材的图片。",
+    "请基于下面的小红书笔记内容资产和垫图要求，生成适合作为GEO内容运营素材的图片。",
     "画面需要专业、信息层级清晰，适合小红书知识内容首图或正文配图；如出现中文文字，必须简洁、清晰、无错别字。",
     "禁止复制原品牌Logo、商标、水印或可识别个人隐私信息。",
     "",
@@ -100,6 +104,18 @@ function buildPrompt(input) {
   ]
     .filter((item) => item !== "")
     .join("\n");
+}
+
+function buildSlotPrompt(input, slot, total) {
+  const prompt = buildPrompt(input);
+  if (total <= 1) return prompt;
+  return [
+    prompt,
+    "",
+    "【本次图片序号】",
+    `请只生成第${slot}张图。若生图提示词中分别描述了第一张图、第二张图、第三张图、第四张图，请严格优先执行第${slot}张图对应的风格、构图和文字要求。`,
+    "四张图需要彼此有统一内容主题，但每张图应有清晰差异，不要重复同一构图。",
+  ].join("\n");
 }
 
 function extractImages(payload) {
@@ -290,6 +306,7 @@ module.exports = async function handler(req, res) {
     const apiUrl = process.env.IMAGE_GENERATION_API_URL || DEFAULT_IMAGE_API_URL;
     const model = process.env.IMAGE_GENERATION_MODEL || DEFAULT_IMAGE_MODEL;
     const size = cleanText(input.size, 32) || process.env.IMAGE_GENERATION_SIZE || "1024x1024";
+    const imageCount = normalizeImageCount(input.imageCount);
     const oversea = parseBoolean(input.oversea, parseBoolean(process.env.IMAGE_GENERATION_OVERSEA, false));
     const prompt = buildPrompt(input);
     const noteId = cleanText(input.noteId, 120);
@@ -313,88 +330,106 @@ module.exports = async function handler(req, res) {
     const modelConfig = await lookupModelConfig(client, model);
 
     const endpoint = new URL(apiUrl);
-    const requestBody = { model, prompt, size, oversea };
-    const referenceImageSent = appendReferenceImage(requestBody, referenceImage);
+    const tasks = [];
+    const allImages = [];
+    const logWarnings = [];
 
-    const providerRes = await fetch(endpoint.toString(), {
-      method: "POST",
-      headers: imageProviderHeaders(apiKey),
-      body: JSON.stringify(requestBody),
-    });
-    const responseText = await providerRes.text();
-    const finishedAt = new Date();
-    const latencyMs = Date.now() - startedMono;
-    let payload = {};
-    try {
-      payload = responseText ? JSON.parse(responseText) : {};
-    } catch {
-      payload = { raw_text: responseText };
-    }
+    for (let slot = 1; slot <= imageCount; slot += 1) {
+      const slotStartedAt = new Date();
+      const slotStartedMono = Date.now();
+      const slotPrompt = buildSlotPrompt(input, slot, imageCount);
+      const requestBody = { model, prompt: slotPrompt, size, oversea };
+      const referenceImageSent = appendReferenceImage(requestBody, referenceImage);
 
-    const images = extractImages(payload);
-    const taskId = extractTaskId(payload);
-    const logWarning = await writeApiLog(client, {
-      traceId: `web:image-generation:${Date.now()}`,
-      modelConfigId: modelConfig.model_config_id,
-      credentialId: modelConfig.credential_id,
-      status: providerRes.ok ? "success" : "failed",
-      requestHost: endpoint.host,
-      requestPath: endpoint.pathname,
-      httpStatus: providerRes.status,
-      noteId,
-      startedAt,
-      finishedAt,
-      latencyMs,
-      requestBytes: Buffer.byteLength(JSON.stringify(requestBody)),
-      responseBytes: Buffer.byteLength(responseText || ""),
-      estimatedUnits: providerRes.ok ? 1 : 0,
-      errorCode: providerRes.ok ? "" : String(payload?.error?.code || payload?.code || providerRes.status),
-      errorMessage: providerRes.ok ? "" : String(payload?.error?.message || payload?.message || responseText).slice(0, 500),
-      rawUsage: { image_count: images.length, task_id: taskId || null },
-      metadata: {
-        source: "web_image_generation_workflow",
-        provider: "duomiapi",
-        model,
-        size,
-        oversea,
-        task_url: taskId ? taskUrlFor(taskId) : null,
-        has_reference_image: Boolean(referenceImage),
-        reference_image_sent: referenceImageSent,
-        prompt_chars: prompt.length,
-        user_id: user.user_id,
-      },
-    });
-
-    if (!providerRes.ok) {
-      sendJson(res, providerRes.status, {
-        ok: false,
-        error: payload?.error?.message || payload?.message || "图像生成任务创建失败",
-        detail: payload,
-        logWarning,
+      const providerRes = await fetch(endpoint.toString(), {
+        method: "POST",
+        headers: imageProviderHeaders(apiKey),
+        body: JSON.stringify(requestBody),
       });
-      return;
-    }
+      const responseText = await providerRes.text();
+      const finishedAt = new Date();
+      const latencyMs = Date.now() - slotStartedMono;
+      let payload = {};
+      try {
+        payload = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        payload = { raw_text: responseText };
+      }
 
-    if (!taskId && !images.length) {
-      sendJson(res, 502, {
-        ok: false,
-        error: "图像生成任务创建成功，但响应中没有找到任务 ID 或图片 URL",
-        detail: payload,
-        logWarning,
+      const images = extractImages(payload).map((image) => ({ ...image, slot }));
+      const taskId = extractTaskId(payload);
+      const logWarning = await writeApiLog(client, {
+        traceId: `web:image-generation:${Date.now()}:${slot}`,
+        modelConfigId: modelConfig.model_config_id,
+        credentialId: modelConfig.credential_id,
+        status: providerRes.ok ? "success" : "failed",
+        requestHost: endpoint.host,
+        requestPath: endpoint.pathname,
+        httpStatus: providerRes.status,
+        noteId,
+        startedAt: slotStartedAt,
+        finishedAt,
+        latencyMs,
+        requestBytes: Buffer.byteLength(JSON.stringify(requestBody)),
+        responseBytes: Buffer.byteLength(responseText || ""),
+        estimatedUnits: providerRes.ok ? 1 : 0,
+        errorCode: providerRes.ok ? "" : String(payload?.error?.code || payload?.code || providerRes.status),
+        errorMessage: providerRes.ok ? "" : String(payload?.error?.message || payload?.message || responseText).slice(0, 500),
+        rawUsage: { image_count: images.length, task_id: taskId || null, slot, image_count_requested: imageCount },
+        metadata: {
+          source: "web_image_generation_workflow",
+          provider: "duomiapi",
+          model,
+          size,
+          oversea,
+          task_url: taskId ? taskUrlFor(taskId) : null,
+          has_reference_image: Boolean(referenceImage),
+          reference_image_sent: referenceImageSent,
+          prompt_chars: slotPrompt.length,
+          image_count_requested: imageCount,
+          slot,
+          user_id: user.user_id,
+        },
       });
-      return;
+      if (logWarning) logWarnings.push(`第${slot}张：${logWarning}`);
+
+      if (!providerRes.ok) {
+        sendJson(res, providerRes.status, {
+          ok: false,
+          error: payload?.error?.message || payload?.message || `第${slot}张图生成任务创建失败`,
+          detail: payload,
+          logWarning: logWarnings.join("；"),
+        });
+        return;
+      }
+
+      if (!taskId && !images.length) {
+        sendJson(res, 502, {
+          ok: false,
+          error: `第${slot}张图任务创建成功，但响应中没有找到任务 ID 或图片 URL`,
+          detail: payload,
+          logWarning: logWarnings.join("；"),
+        });
+        return;
+      }
+
+      tasks.push({ slot, taskId, images });
+      allImages.push(...images);
     }
 
     sendJson(res, 200, {
       ok: true,
-      taskId,
-      status: images.length ? "succeeded" : "processing",
-      images,
+      taskId: tasks[0]?.taskId || "",
+      taskIds: tasks.map((item) => item.taskId).filter(Boolean),
+      tasks,
+      status: allImages.length >= imageCount ? "succeeded" : "processing",
+      images: allImages,
+      imageCount,
       model,
       size,
       prompt,
-      latencyMs,
-      logWarning,
+      latencyMs: Date.now() - startedMono,
+      logWarning: logWarnings.join("；"),
     });
   } catch (error) {
     const finishedAt = new Date();
