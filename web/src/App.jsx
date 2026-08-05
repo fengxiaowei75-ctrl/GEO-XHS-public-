@@ -1314,6 +1314,7 @@ const socialPlatformLabels = Object.fromEntries(socialPlatformOptions.map((item)
 const imageWorkflowHistoryKey = "geo:image-generation-workflow-history:v1";
 const maxImageWorkflowHistory = 12;
 const maxWorkflowImages = 10;
+const maxImageTaskPollAttempts = 24;
 
 function normalizeWorkflowImageCount(value) {
   const count = Number(value);
@@ -1403,6 +1404,12 @@ function wait(ms) {
   });
 }
 
+function imageTaskPollDelay(attempt) {
+  if (attempt === 0) return 4500;
+  if (attempt < 3) return 6500;
+  return 10000;
+}
+
 function normalizeResultImage(image, fallbackSlot, fallbackVersion = 1) {
   if (!image?.url) return null;
   const slot = normalizeWorkflowImageCount(image.slot || fallbackSlot || 1);
@@ -1444,6 +1451,69 @@ function imageVersionsForSlot(result, slot) {
 
 function allImageVersions(result) {
   return Array.from({ length: maxWorkflowImages }, (_, index) => imageVersionsForSlot(result, index + 1)).flat();
+}
+
+function markdownSection(title, value) {
+  return [`## ${title}`, "", String(value || "").trim() || "暂无", ""].join("\n");
+}
+
+function imageOutputMarkdown(item) {
+  const form = item?.form || {};
+  const images = generatedImagesForSave(item?.result);
+  const imageRows = images.length
+    ? images.map((image) => `- 第${image.slot}张 v${image.version || 1}: ${image.url}${image.editInstruction ? `\n  - 改图要求：${image.editInstruction}` : ""}`).join("\n")
+    : "暂无";
+  return [
+    `# ${form.title || form.noteId || "GEO 图生图产出"}`,
+    "",
+    `笔记 ID：${form.noteId || "-"}`,
+    `产出时间：${item?.createdAt || "-"}`,
+    item?.updatedAt ? `更新时间：${item.updatedAt}` : "",
+    "",
+    markdownSection("笔记标题", form.title),
+    markdownSection("笔记文案", form.content),
+    markdownSection("目标人群画像", form.targetPersona),
+    markdownSection("用户痛点", form.userPain),
+    markdownSection("业务逻辑", form.businessLogic),
+    markdownSection("业务知识点", form.businessKnowledge),
+    markdownSection("整组风格/全局补充", form.imagePrompt),
+    "## 逐图提示词",
+    "",
+    normalizeWorkflowImagePrompts(form.imagePrompts)
+      .map((prompt) => `### 第${prompt.slot}张\n\n${prompt.prompt}`)
+      .join("\n\n") || "暂无",
+    "",
+    "## 图片版本",
+    "",
+    imageRows,
+    "",
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
+}
+
+function socialOutputMarkdown(item) {
+  const form = item?.form || {};
+  const draft = item?.socialDraft || {};
+  const platformLabel = socialPlatformLabels[item?.socialPlatform] || draft.platformLabel || "社媒";
+  return [
+    `# ${form.title || form.noteId || "社媒内容草稿"}`,
+    "",
+    `平台：${platformLabel}`,
+    `笔记 ID：${form.noteId || "-"}`,
+    `产出时间：${item?.updatedAt || item?.createdAt || "-"}`,
+    "",
+    draft.content || "暂无",
+    "",
+  ].join("\n");
+}
+
+function historyDocumentsForItem(item) {
+  const docs = [{ key: "image-output", label: "图生图产出.md", filename: "图生图产出.md", content: imageOutputMarkdown(item) }];
+  if (item?.socialDraft?.content) {
+    docs.push({ key: "social-output", label: "社媒内容.md", filename: "社媒内容.md", content: socialOutputMarkdown(item) });
+  }
+  return docs;
 }
 
 function imageSlotItems(result) {
@@ -1557,6 +1627,10 @@ function downloadBlob(blob, fallbackFilename) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function downloadTextFile(filename, content) {
+  downloadBlob(new Blob([content], { type: "text/markdown;charset=utf-8" }), filename);
+}
+
 function filenameFromDisposition(value, fallback) {
   const matched = String(value || "").match(/filename\*=UTF-8''([^;]+)/i);
   if (!matched) return fallback;
@@ -1584,6 +1658,16 @@ function writeImageWorkflowHistory(items) {
   } catch {
     // Browser storage can fail when image URLs or drafts are too large; the UI still keeps current state.
   }
+}
+
+function upsertImageWorkflowHistoryItem(item, currentItems = []) {
+  const storedItems = readImageWorkflowHistory();
+  const source = storedItems.length ? storedItems : currentItems;
+  const existing = source.find((historyItem) => historyItem.id === item.id);
+  const mergedItem = existing ? { ...item, createdAt: existing.createdAt || item.createdAt, updatedAt: item.createdAt } : item;
+  const next = [mergedItem, ...source.filter((historyItem) => historyItem.id !== item.id)].slice(0, maxImageWorkflowHistory);
+  writeImageWorkflowHistory(next);
+  return next;
 }
 
 function historyFormSnapshot(form) {
@@ -1736,13 +1820,8 @@ function ImageGenerationWorkflow({ data }) {
       socialPlatform,
       socialDraft: compactSocialDraft(nextSocialDraft),
     };
-    setHistoryItems((current) => {
-      const existing = current.find((historyItem) => historyItem.id === item.id);
-      const mergedItem = existing ? { ...item, createdAt: existing.createdAt || item.createdAt, updatedAt: item.createdAt } : item;
-      const next = [mergedItem, ...current.filter((historyItem) => historyItem.id !== item.id)].slice(0, maxImageWorkflowHistory);
-      writeImageWorkflowHistory(next);
-      return next;
-    });
+    const next = upsertImageWorkflowHistoryItem(item, historyItems);
+    setHistoryItems(next);
   }
 
   function restoreHistoryItem(item) {
@@ -1752,7 +1831,7 @@ function ImageGenerationWorkflow({ data }) {
     setSocialDraft(item.socialDraft || null);
     setEditingSlot(null);
     setEditInstruction("");
-    setMessage("已恢复历史图片");
+    setMessage("已恢复历史产出");
     setSocialMessage(item.socialDraft?.content ? "已恢复历史社媒草稿" : "");
   }
 
@@ -1864,8 +1943,8 @@ function ImageGenerationWorkflow({ data }) {
       if (!editImages.length) {
         if (!taskState.some((task) => task.taskId)) throw new Error("改图任务创建成功，但没有返回任务 ID");
         setMessage(`第${slot}张改图生成中`);
-        for (let attempt = 0; attempt < 60; attempt += 1) {
-          await wait(attempt === 0 ? 1600 : 3000);
+        for (let attempt = 0; attempt < maxImageTaskPollAttempts; attempt += 1) {
+          await wait(imageTaskPollDelay(attempt));
           const task = taskState[0];
           if (!task?.taskId) continue;
           const taskPayload = await requestJson(`/api/image-task?taskId=${encodeURIComponent(task.taskId)}`);
@@ -1956,8 +2035,8 @@ function ImageGenerationWorkflow({ data }) {
       }
       setMessage(payload.logWarning ? `任务已创建，监控日志写入提示：${payload.logWarning}` : "任务已创建，等待生成结果");
 
-      for (let attempt = 0; attempt < 60; attempt += 1) {
-        await wait(attempt === 0 ? 1600 : 3000);
+      for (let attempt = 0; attempt < maxImageTaskPollAttempts; attempt += 1) {
+        await wait(imageTaskPollDelay(attempt));
         for (let index = 0; index < taskState.length; index += 1) {
           const task = taskState[index];
           if (!task.taskId || task.images?.length) continue;
@@ -2209,6 +2288,9 @@ function ImageGenerationWorkflow({ data }) {
             className="social-draft-textarea"
             value={socialDraft?.content || ""}
             onChange={(event) => setSocialDraft((current) => ({ ...(current || { platform: socialPlatform }), content: event.target.value }))}
+            onBlur={() => {
+              if (result?.images?.length && socialDraft?.content) persistHistoryItem(result, socialDraft);
+            }}
             placeholder="生成后的社媒内容会出现在这里"
             rows={10}
           />
@@ -2296,7 +2378,7 @@ function ImageGenerationWorkflow({ data }) {
           </>
         ) : null}
         <div className="image-history-panel">
-          <SectionHeader icon={Clock3} title="历史图片" action={<StatusPill tone="neutral">{historyItems.length}组</StatusPill>} />
+          <SectionHeader icon={Clock3} title="历史产出" action={<StatusPill tone="neutral">{historyItems.length}组</StatusPill>} />
           {historyItems.length ? (
             <div className="image-history-list">
               {historyItems.map((item) => (
@@ -2323,11 +2405,19 @@ function ImageGenerationWorkflow({ data }) {
                       </button>
                     ))}
                   </div>
+                  <div className="image-history-docs">
+                    {historyDocumentsForItem(item).map((doc) => (
+                      <button type="button" key={`${item.id}-${doc.key}`} onClick={() => downloadTextFile(doc.filename, doc.content)}>
+                        <FileText size={14} />
+                        {doc.label}
+                      </button>
+                    ))}
+                  </div>
                 </article>
               ))}
             </div>
           ) : (
-            <div className="image-history-empty">暂无历史图片，生成完成后会自动保留最近记录</div>
+            <div className="image-history-empty">暂无历史产出，生成完成后会自动保留最近记录</div>
           )}
         </div>
       </section>
