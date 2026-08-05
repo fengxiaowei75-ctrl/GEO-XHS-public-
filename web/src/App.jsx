@@ -1308,6 +1308,8 @@ const socialPlatformOptions = [
 ];
 
 const socialPlatformLabels = Object.fromEntries(socialPlatformOptions.map((item) => [item.value, item.label]));
+const imageWorkflowHistoryKey = "geo:image-generation-workflow-history:v1";
+const maxImageWorkflowHistory = 12;
 
 function imageWorkflowFormFromNote(note, current) {
   return {
@@ -1393,6 +1395,85 @@ function filenameFromDisposition(value, fallback) {
   }
 }
 
+function readImageWorkflowHistory() {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(imageWorkflowHistoryKey) || "[]");
+    return Array.isArray(parsed) ? parsed.filter((item) => generatedImagesForSave(item?.result).length).slice(0, maxImageWorkflowHistory) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeImageWorkflowHistory(items) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(imageWorkflowHistoryKey, JSON.stringify(items.slice(0, maxImageWorkflowHistory)));
+  } catch {
+    // Browser storage can fail when image URLs or drafts are too large; the UI still keeps current state.
+  }
+}
+
+function historyFormSnapshot(form) {
+  return {
+    noteId: form.noteId || "",
+    title: form.title || "",
+    content: form.content || "",
+    targetPersona: form.targetPersona || "",
+    userPain: form.userPain || "",
+    businessLogic: form.businessLogic || "",
+    businessKnowledge: form.businessKnowledge || "",
+    imagePrompt: form.imagePrompt || "",
+    referenceImageName: form.referenceImageName || "",
+    size: form.size || "1024x1024",
+    imageCount: form.imageCount || "1",
+  };
+}
+
+function compactImageResult(result) {
+  const tasks = (result?.tasks || []).slice(0, 4).map((task) => ({
+    slot: Number(task.slot || 0),
+    taskId: task.taskId || "",
+    status: task.status || "",
+    images: (task.images || [])
+      .filter((image) => image?.url)
+      .slice(0, 1)
+      .map((image) => ({ id: image.id, url: image.url, slot: Number(image.slot || task.slot || 0) })),
+  }));
+  const topLevelImages = (result?.images || []).filter((image) => image?.url);
+  const sourceImages = topLevelImages.length ? topLevelImages : tasks.flatMap((task) => task.images || []);
+  const images = sourceImages.slice(0, 4).map((image, index) => ({
+    id: image.id || `history-image-${index}`,
+    url: image.url,
+    slot: Number(image.slot || index + 1),
+  }));
+  return {
+    ok: true,
+    taskId: result?.taskId || "",
+    taskIds: result?.taskIds || [],
+    tasks,
+    status: result?.status || "succeeded",
+    images,
+    imageCount: result?.imageCount || images.length || 1,
+    model: result?.model || "",
+    size: result?.size || "",
+    prompt: String(result?.prompt || "").slice(0, 12000),
+    latencyMs: result?.latencyMs || 0,
+    logWarning: result?.logWarning || "",
+  };
+}
+
+function compactSocialDraft(draft) {
+  if (!draft?.content) return null;
+  return {
+    platform: draft.platform,
+    platformLabel: draft.platformLabel,
+    content: draft.content,
+    model: draft.model || "",
+    latencyMs: draft.latencyMs || 0,
+  };
+}
+
 function ImageWorkflowField({ label, value, onChange, multiline = true, placeholder = "", rows = 4 }) {
   return (
     <label className="image-workflow-field">
@@ -1408,16 +1489,21 @@ function ImageWorkflowField({ label, value, onChange, multiline = true, placehol
 
 function ImageGenerationWorkflow({ data }) {
   const noteRows = data?.contentInsight?.noteAnalysis || [];
-  const [form, setForm] = useState(emptyImageWorkflowForm);
+  const initialHistory = useMemo(() => readImageWorkflowHistory(), []);
+  const latestHistory = initialHistory[0] || null;
+  const [form, setForm] = useState(() =>
+    latestHistory?.form ? { ...emptyImageWorkflowForm, ...latestHistory.form, referenceImage: "", referenceImageName: latestHistory.form.referenceImageName || "" } : emptyImageWorkflowForm,
+  );
   const [loadingNote, setLoadingNote] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [generatingSocial, setGeneratingSocial] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [message, setMessage] = useState("");
   const [socialMessage, setSocialMessage] = useState("");
-  const [result, setResult] = useState(null);
-  const [socialPlatform, setSocialPlatform] = useState("xhs");
-  const [socialDraft, setSocialDraft] = useState(null);
+  const [result, setResult] = useState(() => latestHistory?.result || null);
+  const [socialPlatform, setSocialPlatform] = useState(() => latestHistory?.socialPlatform || latestHistory?.socialDraft?.platform || "xhs");
+  const [socialDraft, setSocialDraft] = useState(() => latestHistory?.socialDraft || null);
+  const [historyItems, setHistoryItems] = useState(initialHistory);
   const [promptOpen, setPromptOpen] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
   const noteOptions = useMemo(
@@ -1437,6 +1523,42 @@ function ImageGenerationWorkflow({ data }) {
     setSocialPlatform(value);
     setSocialDraft(null);
     setSocialMessage("");
+  }
+
+  function persistHistoryItem(nextResult, nextSocialDraft = socialDraft) {
+    const compactResult = compactImageResult(nextResult);
+    if (!generatedImagesForSave(compactResult).length) return;
+    const taskKey = compactResult.taskIds?.length ? compactResult.taskIds.join("|") : compactResult.taskId || compactResult.images.map((image) => image.url).join("|");
+    const item = {
+      id: taskKey || `history-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      form: historyFormSnapshot(form),
+      result: compactResult,
+      socialPlatform,
+      socialDraft: compactSocialDraft(nextSocialDraft),
+    };
+    setHistoryItems((current) => {
+      const next = [item, ...current.filter((historyItem) => historyItem.id !== item.id)].slice(0, maxImageWorkflowHistory);
+      writeImageWorkflowHistory(next);
+      return next;
+    });
+  }
+
+  function restoreHistoryItem(item) {
+    setForm({ ...emptyImageWorkflowForm, ...(item.form || {}), referenceImage: "", referenceImageName: item.form?.referenceImageName || "" });
+    setResult(item.result || null);
+    setSocialPlatform(item.socialPlatform || item.socialDraft?.platform || "xhs");
+    setSocialDraft(item.socialDraft || null);
+    setMessage("已恢复历史图片");
+    setSocialMessage(item.socialDraft?.content ? "已恢复历史社媒草稿" : "");
+  }
+
+  function removeHistoryItem(id) {
+    setHistoryItems((current) => {
+      const next = current.filter((item) => item.id !== id);
+      writeImageWorkflowHistory(next);
+      return next;
+    });
   }
 
   async function loadNote() {
@@ -1510,6 +1632,7 @@ function ImageGenerationWorkflow({ data }) {
       const baseResult = { ...payload, latencyMs: Date.now() - startedAt };
       setResult(baseResult);
       if ((payload.images || []).length >= imageCount) {
+        persistHistoryItem(baseResult);
         setMessage(payload.logWarning ? `已生成，监控日志写入提示：${payload.logWarning}` : "已生成并写入监控日志");
         return;
       }
@@ -1553,6 +1676,7 @@ function ImageGenerationWorkflow({ data }) {
         };
         setResult(nextResult);
         if (images.length >= imageCount) {
+          persistHistoryItem(nextResult);
           setMessage(payload.logWarning ? `已生成，监控日志写入提示：${payload.logWarning}` : "已生成并写入监控日志");
           return;
         }
@@ -1587,6 +1711,7 @@ function ImageGenerationWorkflow({ data }) {
         }),
       });
       setSocialDraft(payload);
+      if (result?.images?.length) persistHistoryItem(result, payload);
       setSocialMessage(payload.logWarning ? `已生成，监控日志写入提示：${payload.logWarning}` : "社媒内容已生成并写入监控日志");
     } catch (error) {
       setSocialMessage(error.message);
@@ -1795,6 +1920,40 @@ function ImageGenerationWorkflow({ data }) {
             </div>
           </>
         ) : null}
+        <div className="image-history-panel">
+          <SectionHeader icon={Clock3} title="历史图片" action={<StatusPill tone="neutral">{historyItems.length}组</StatusPill>} />
+          {historyItems.length ? (
+            <div className="image-history-list">
+              {historyItems.map((item) => (
+                <article className="image-history-item" key={item.id}>
+                  <div className="image-history-head">
+                    <div>
+                      <strong>{item.form?.title || item.form?.noteId || "未命名草稿"}</strong>
+                      <span>{formatDateTimeSecond(item.createdAt)} · {socialPlatformLabels[item.socialPlatform] || item.socialDraft?.platformLabel || "社媒"}</span>
+                    </div>
+                    <div className="image-history-actions">
+                      <button className="copy-button" type="button" onClick={() => restoreHistoryItem(item)}>
+                        恢复
+                      </button>
+                      <button className="copy-button" type="button" onClick={() => removeHistoryItem(item.id)}>
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                  <div className="image-history-thumbs">
+                    {generatedImagesForSave(item.result).map((image) => (
+                      <button type="button" key={`${item.id}-${image.slot}`} onClick={() => setPreviewImage(image)}>
+                        <img src={image.url} alt={`历史图片 ${image.slot}`} />
+                      </button>
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="image-history-empty">暂无历史图片，生成完成后会自动保留最近记录</div>
+          )}
+        </div>
       </section>
       {previewImage ? (
         <div className="image-preview-backdrop" onClick={() => setPreviewImage(null)} role="presentation">
