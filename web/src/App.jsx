@@ -2631,10 +2631,6 @@ function sourceImagesForNote(note) {
   return items;
 }
 
-function firstSourceImageUrl(note) {
-  return sourceImagesForNote(note)[0]?.url || "";
-}
-
 function fixedProgressStepClass(progress, index) {
   if (progress.status === "failed" && index === progress.activeStep) return "failed";
   if (progress.status === "done" || index < progress.activeStep) return "done";
@@ -2654,7 +2650,6 @@ function FixedContentFlow({ data }) {
   const [noteDetail, setNoteDetail] = useState(null);
   const [loadingNoteDetail, setLoadingNoteDetail] = useState(false);
   const [detailMessage, setDetailMessage] = useState("");
-  const [useSourceReference, setUseSourceReference] = useState(true);
   const [running, setRunning] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [progress, setProgress] = useState({ status: "idle", activeStep: 0, message: "选择一条候选笔记后开始洗稿" });
@@ -2669,7 +2664,6 @@ function FixedContentFlow({ data }) {
   const visibleNotes = selectedGroup.notes || [];
   const selectedNote = visibleNotes.find((note) => note.note_id === selectedNoteId) || visibleNotes[0] || null;
   const sourceImages = sourceImagesForNote(noteDetail);
-  const referenceUrl = useSourceReference ? firstSourceImageUrl(noteDetail) : "";
   const selectedForm = noteDetail ? imageWorkflowFormFromNote(noteDetail, emptyImageWorkflowForm) : null;
   const selectedImageCount = selectedForm ? normalizeWorkflowImageCount(selectedForm.imageCount) : 1;
 
@@ -2758,8 +2752,7 @@ function FixedContentFlow({ data }) {
       const startedAt = Date.now();
       const imageCount = normalizeWorkflowImageCount(form.imageCount);
       const imagePrompts = normalizeWorkflowImagePrompts(form.imagePrompts).slice(0, imageCount);
-      const fixedReferenceImage = useSourceReference ? firstSourceImageUrl(detail) : "";
-      updateProgress(1, fixedReferenceImage ? "创建 Duomi 生图任务，已带入首张原图垫图" : "创建 Duomi 生图任务");
+      updateProgress(1, "创建 Duomi 生图任务");
       const payload = await requestJson("/api/image-generate", {
         method: "POST",
         body: JSON.stringify({
@@ -2773,7 +2766,6 @@ function FixedContentFlow({ data }) {
           imagePrompt: form.imagePrompt,
           imagePrompts,
           unifiedVisualStyle: form.unifiedVisualStyle !== false,
-          referenceImage: fixedReferenceImage,
           size: form.size,
           imageCount,
         }),
@@ -3091,15 +3083,6 @@ function FixedContentFlow({ data }) {
               <div className="fixed-original-images">
                 <div className="fixed-subhead">
                   <strong>原笔记图片</strong>
-                  <label className="image-style-toggle">
-                    <input
-                      checked={useSourceReference}
-                      type="checkbox"
-                      onChange={(event) => setUseSourceReference(event.target.checked)}
-                      disabled={!sourceImages.length || running}
-                    />
-                    <span>首图垫图</span>
-                  </label>
                 </div>
                 {sourceImages.length ? (
                   <div className="fixed-source-image-grid">
@@ -3113,7 +3096,6 @@ function FixedContentFlow({ data }) {
                 ) : (
                   <div className="fixed-source-empty">{loadingNoteDetail ? "原图读取中" : "暂无原图预览"}</div>
                 )}
-                {referenceUrl ? <small>洗稿时会把第1张原图作为垫图传入。</small> : null}
               </div>
 
               <div className="fixed-asset-fields">
