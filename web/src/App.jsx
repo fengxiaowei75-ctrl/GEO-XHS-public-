@@ -1439,15 +1439,15 @@ function dedupeImageVersions(images) {
 function imageVersionsForSlot(result, slot) {
   const fallbackSlot = normalizeWorkflowImageCount(slot);
   const collected = [];
+  (result?.images || []).forEach((image, index) => {
+    const normalized = normalizeResultImage(image, image.slot || index + 1, index + 1);
+    if (normalized?.slot === fallbackSlot) collected.push(normalized);
+  });
   (result?.tasks || []).forEach((task) => {
     (task.images || []).forEach((image, index) => {
       const normalized = normalizeResultImage({ ...image, taskId: image.taskId || task.taskId }, task.slot || fallbackSlot, index + 1);
       if (normalized?.slot === fallbackSlot) collected.push(normalized);
     });
-  });
-  (result?.images || []).forEach((image, index) => {
-    const normalized = normalizeResultImage(image, image.slot || index + 1, index + 1);
-    if (normalized?.slot === fallbackSlot) collected.push(normalized);
   });
   return dedupeImageVersions(collected).map((image, index) => ({ ...image, version: index + 1 }));
 }
@@ -1464,7 +1464,7 @@ function imageOutputMarkdown(item) {
   const form = item?.form || {};
   const images = generatedImagesForSave(item?.result);
   const imageRows = images.length
-    ? images.map((image) => `- 第${image.slot}张 v${image.version || 1}: ${image.url}${image.editInstruction ? `\n  - 改图要求：${image.editInstruction}` : ""}`).join("\n")
+    ? images.map((image) => `- ${image.label || `第${image.slot}张 v${image.version || 1}`}: ${image.url}${image.editInstruction ? `\n  - 改图要求：${image.editInstruction}` : ""}`).join("\n")
     : "暂无";
   return [
     `# ${form.title || form.noteId || "GEO 图生图产出"}`,
@@ -1545,11 +1545,57 @@ function imageSlotItems(result) {
   return slots;
 }
 
+function imageVersionDisplayItems(result, imageCount = maxWorkflowImages, includeEmpty = false) {
+  const activeCount = normalizeWorkflowImageCount(imageCount);
+  return imageSlotItems(result).flatMap((slot) => {
+    const active = slot.slot <= activeCount;
+    if (slot.versions.length) {
+      return slot.versions.map((image) => ({
+        key: `${slot.slot}-${image.version}-${image.url}`,
+        slot: slot.slot,
+        image,
+        active,
+        status: "succeeded",
+        versionCount: slot.versionCount,
+        isLatest: Number(image.version || 1) === slot.versionCount,
+      }));
+    }
+    return includeEmpty
+      ? [
+          {
+            key: `empty-${slot.slot}`,
+            slot: slot.slot,
+            image: null,
+            active,
+            status: slot.status,
+            versionCount: 0,
+            isLatest: false,
+          },
+        ]
+      : [];
+  });
+}
+
+function imageVersionBadge(image) {
+  const slot = Number(image?.slot || 0);
+  const version = Number(image?.version || 1);
+  if (!slot) return version > 1 ? `v${version}` : "v1";
+  return version > 1 ? `${slot}-v${version}` : `${slot}-v1`;
+}
+
+function imageVersionLabel(image) {
+  const slot = Number(image?.slot || 0);
+  const version = Number(image?.version || 1);
+  const base = slot ? `第${slot}张` : "图片";
+  return version > 1 ? `${base} v${version} 改图` : `${base} v1 原图`;
+}
+
 function generatedImagesForSave(result) {
   return allImageVersions(result).map((image) => ({
     slot: image.slot,
     version: image.version,
     url: image.url,
+    label: imageVersionLabel(image),
     editedAt: image.editedAt || "",
     editInstruction: image.editInstruction || "",
   }));
@@ -1808,6 +1854,7 @@ function ImageGenerationWorkflow({ data }) {
   const [promptOpen, setPromptOpen] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
   const [editingSlot, setEditingSlot] = useState(null);
+  const [editingSourceImage, setEditingSourceImage] = useState(null);
   const [editInstruction, setEditInstruction] = useState("");
   const [editingImage, setEditingImage] = useState(false);
   const noteOptions = useMemo(
@@ -1862,6 +1909,7 @@ function ImageGenerationWorkflow({ data }) {
     setSocialPlatform(item.socialPlatform || item.socialDraft?.platform || "xhs");
     setSocialDraft(item.socialDraft || null);
     setEditingSlot(null);
+    setEditingSourceImage(null);
     setEditInstruction("");
     setMessage("已恢复历史产出");
     setSocialMessage(item.socialDraft?.content ? "已恢复历史社媒草稿" : "");
@@ -1917,8 +1965,9 @@ function ImageGenerationWorkflow({ data }) {
     reader.readAsDataURL(file);
   }
 
-  function openImageEdit(slot) {
+  function openImageEdit(slot, sourceImage = null) {
     setEditingSlot(slot);
+    setEditingSourceImage(sourceImage);
     setEditInstruction("");
     setMessage("");
   }
@@ -1928,7 +1977,7 @@ function ImageGenerationWorkflow({ data }) {
     const slot = normalizeWorkflowImageCount(editingSlot);
     const instruction = editInstruction.trim();
     const sourceSlot = imageSlotItems(result).find((item) => item.slot === slot);
-    const sourceImage = sourceSlot?.image;
+    const sourceImage = editingSourceImage?.url ? editingSourceImage : sourceSlot?.image;
     if (!sourceImage?.url) {
       setMessage("请先生成当前图片后再改图");
       return;
@@ -2007,6 +2056,7 @@ function ImageGenerationWorkflow({ data }) {
       setResult(nextResult);
       persistHistoryItem(nextResult);
       setEditingSlot(null);
+      setEditingSourceImage(null);
       setEditInstruction("");
       setMessage(payload.logWarning ? `第${slot}张已改图，监控日志写入提示：${payload.logWarning}` : `第${slot}张已改图并写入监控日志`);
     } catch (error) {
@@ -2333,33 +2383,38 @@ function ImageGenerationWorkflow({ data }) {
       <section className="panel image-workflow-output">
         <SectionHeader icon={Sparkles} title="生成结果" action={result?.model ? <StatusPill tone="green">{result.model}</StatusPill> : null} />
         <div className="image-result-stage image-result-grid">
-          {imageSlotItems(result).map((slot) => {
-            const active = slot.slot <= normalizeWorkflowImageCount(form.imageCount);
+          {imageVersionDisplayItems(result, form.imageCount, true).map((item) => {
+            const active = item.active;
+            const slot = item.slot;
+            const image = item.image;
             return (
-              <div className={`image-result-card ${active ? "active" : ""}`} key={slot.slot}>
+              <div className={`image-result-card ${active ? "active" : ""}`} key={item.key}>
                 <button
-                  className={`image-result-slot ${slot.image?.url ? "has-image" : ""} ${active ? "active" : ""}`}
+                  className={`image-result-slot ${image?.url ? "has-image" : ""} ${active ? "active" : ""}`}
                   type="button"
-                  onClick={() => (slot.image?.url ? setPreviewImage(slot.image) : null)}
-                  disabled={!slot.image?.url}
+                  onClick={() => (image?.url ? setPreviewImage(image) : null)}
+                  disabled={!image?.url}
                 >
-                  {slot.image?.url ? (
-                    <img src={slot.image.url} alt={`生成结果 ${slot.slot}`} />
+                  {image?.url ? (
+                    <>
+                      <img src={image.url} alt={`生成结果 ${slot} ${image.version || 1}`} />
+                      <span className="image-version-badge">{imageVersionBadge(image)}</span>
+                    </>
                   ) : (
                     <span>
                       <ImagePlus size={24} />
-                      <strong>图片 {slot.slot}</strong>
-                      <em>{generating && active ? imageTaskStatusLabel(slot.status === "empty" ? "processing" : slot.status) : active ? "等待生成" : "空位"}</em>
+                      <strong>图片 {slot}</strong>
+                      <em>{generating && active ? imageTaskStatusLabel(item.status === "empty" ? "processing" : item.status) : active ? "等待生成" : "空位"}</em>
                     </span>
                   )}
                 </button>
-                {slot.image?.url ? (
+                {image?.url ? (
                   <div className="image-slot-actions">
-                    <button className="copy-button" type="button" onClick={() => openImageEdit(slot.slot)} disabled={editingImage || generating}>
+                    <button className="copy-button" type="button" onClick={() => openImageEdit(slot, image)} disabled={editingImage || generating}>
                       <PencilLine size={14} />
                       改图
                     </button>
-                    <span>{slot.versionCount > 1 ? `版本 ${slot.versionCount}` : "原图版本"}</span>
+                    <span>{item.isLatest ? "最新版本" : "历史版本"}</span>
                   </div>
                 ) : null}
               </div>
@@ -2369,12 +2424,13 @@ function ImageGenerationWorkflow({ data }) {
         {editingSlot ? (
           <form className="image-edit-panel" onSubmit={editGeneratedImage}>
             <div className="image-edit-head">
-              <strong>修改第{editingSlot}张</strong>
+              <strong>{imageVersionLabel(editingSourceImage || { slot: editingSlot })}</strong>
               <button
                 className="copy-button"
                 type="button"
                 onClick={() => {
                   setEditingSlot(null);
+                  setEditingSourceImage(null);
                   setEditInstruction("");
                 }}
                 disabled={editingImage}
@@ -2433,7 +2489,7 @@ function ImageGenerationWorkflow({ data }) {
                     {generatedImagesForSave(item.result).map((image, index) => (
                       <button type="button" key={`${item.id}-${image.slot}-${image.version}-${index}`} onClick={() => setPreviewImage(image)}>
                         <img src={image.url} alt={`历史图片 ${image.slot}-${image.version}`} />
-                        <span>{image.version > 1 ? `${image.slot}-${image.version}` : image.slot}</span>
+                        <span>{image.label || (image.version > 1 ? `${image.slot}-${image.version}` : image.slot)}</span>
                       </button>
                     ))}
                   </div>
@@ -2626,6 +2682,7 @@ function FixedContentFlow({ data }) {
   const [resultOpen, setResultOpen] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
   const [editingSlot, setEditingSlot] = useState(null);
+  const [editingSourceImage, setEditingSourceImage] = useState(null);
   const [editInstruction, setEditInstruction] = useState("");
   const [editingImage, setEditingImage] = useState(false);
   const [historyItems, setHistoryItems] = useState(initialHistory);
@@ -2744,6 +2801,7 @@ function FixedContentFlow({ data }) {
     });
     setResultOpen(true);
     setEditingSlot(null);
+    setEditingSourceImage(null);
     setEditInstruction("");
     setProgress({ status: "done", activeStep: 4, message: "已恢复历史草稿" });
   }
@@ -2880,8 +2938,9 @@ function FixedContentFlow({ data }) {
     }
   }
 
-  function openFixedImageEdit(slot) {
+  function openFixedImageEdit(slot, sourceImage = null) {
     setEditingSlot(slot);
+    setEditingSourceImage(sourceImage);
     setEditInstruction("");
     setProgress((current) => ({ ...current, message: `准备修改第${slot}张图` }));
   }
@@ -2892,7 +2951,7 @@ function FixedContentFlow({ data }) {
     const instruction = editInstruction.trim();
     const currentImageResult = fixedResult?.imageResult;
     const sourceSlot = imageSlotItems(currentImageResult).find((item) => item.slot === slot);
-    const sourceImage = sourceSlot?.image;
+    const sourceImage = editingSourceImage?.url ? editingSourceImage : sourceSlot?.image;
     if (!sourceImage?.url) {
       setProgress((current) => ({ ...current, status: "failed", message: "请先生成当前图片后再改图" }));
       return;
@@ -2976,6 +3035,7 @@ function FixedContentFlow({ data }) {
       setFixedResult(nextFixedResult);
       persistFixedHistoryItem(nextFixedResult, fixedResult.socialDraft);
       setEditingSlot(null);
+      setEditingSourceImage(null);
       setEditInstruction("");
       setProgress({ status: "done", activeStep: 4, message: `第${slot}张已改图` });
     } catch (error) {
@@ -3035,7 +3095,7 @@ function FixedContentFlow({ data }) {
   }
 
   if (resultOpen && fixedResult) {
-    const images = imageSlotItems(fixedResult.imageResult).filter((slot) => slot.image?.url);
+    const images = imageVersionDisplayItems(fixedResult.imageResult, fixedResult.form?.imageCount || 1, false);
     return (
       <section className="fixed-content-flow">
         <section className="panel fixed-result-panel">
@@ -3071,18 +3131,18 @@ function FixedContentFlow({ data }) {
             <section className="fixed-image-output">
               <SectionHeader icon={ImagePlus} title="生成图片" action={<StatusPill tone="neutral">{formatNumber(images.length)} 张</StatusPill>} />
               <div className="fixed-result-images">
-                {images.map((slot) => (
-                  <div className="fixed-result-image-card" key={`${slot.slot}-${slot.image.url}`}>
-                    <button type="button" onClick={() => setPreviewImage(slot.image)}>
-                      <img src={slot.image.url} alt={`固定内容流生成图 ${slot.slot}`} />
-                      <span>第{slot.slot}张</span>
+                {images.map((item) => (
+                  <div className="fixed-result-image-card" key={item.key}>
+                    <button type="button" className="fixed-result-thumb" onClick={() => setPreviewImage(item.image)} disabled={!item.image?.url}>
+                      <img src={item.image.url} alt={`固定内容流生成图 ${item.slot} ${item.image.version || 1}`} />
+                      <span className="image-version-badge">{imageVersionBadge(item.image)}</span>
                     </button>
                     <div className="image-slot-actions">
-                      <button className="copy-button" type="button" onClick={() => openFixedImageEdit(slot.slot)} disabled={editingImage || running}>
+                      <button className="copy-button" type="button" onClick={() => openFixedImageEdit(item.slot, item.image)} disabled={editingImage || running}>
                         <PencilLine size={14} />
                         改图
                       </button>
-                      <span>{slot.versionCount > 1 ? `版本 ${slot.versionCount}` : "原图版本"}</span>
+                      <span>{item.isLatest ? "最新版本" : "历史版本"}</span>
                     </div>
                   </div>
                 ))}
@@ -3090,12 +3150,13 @@ function FixedContentFlow({ data }) {
               {editingSlot ? (
                 <form className="image-edit-panel" onSubmit={editFixedGeneratedImage}>
                   <div className="image-edit-head">
-                    <strong>修改第{editingSlot}张</strong>
+                    <strong>{imageVersionLabel(editingSourceImage || { slot: editingSlot })}</strong>
                     <button
                       className="copy-button"
                       type="button"
                       onClick={() => {
                         setEditingSlot(null);
+                        setEditingSourceImage(null);
                         setEditInstruction("");
                       }}
                       disabled={editingImage}
@@ -3314,6 +3375,14 @@ function FixedContentFlow({ data }) {
                           </div>
                         </div>
                         <p className="fixed-history-preview">{textPreview(item.socialDraft?.content || "", 180) || "暂无社媒草稿"}</p>
+                        <div className="image-history-thumbs fixed-history-thumbs">
+                          {generatedImagesForSave(item.result).map((image, index) => (
+                            <button type="button" key={`${item.id}-${image.slot}-${image.version}-${index}`} onClick={() => setPreviewImage(image)}>
+                              <img src={image.url} alt={`历史图片 ${image.slot}-${image.version}`} />
+                              <span>{image.label || (image.version > 1 ? `${image.slot}-${image.version}` : image.slot)}</span>
+                            </button>
+                          ))}
+                        </div>
                         <div className="fixed-history-meta">
                           <span>{item.lineShortTitle || item.lineTitle || "固定内容线"}</span>
                           <span>{formatNumber(generatedImagesForSave(item.result).length)} 张</span>

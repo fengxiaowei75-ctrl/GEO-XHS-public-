@@ -57,7 +57,11 @@ function datePrefix(value) {
 
 function markdownFor(input, platformLabel) {
   const imageRows = Array.isArray(input.images)
-    ? input.images.slice(0, MAX_DRAFT_IMAGES).map((image, index) => `- images/${imageFileStem(image, index)}`)
+    ? input.images.slice(0, MAX_DRAFT_IMAGES).map((image, index) => {
+        const label = imageVersionLabel(image, index);
+        const instruction = cleanText(image?.editInstruction, 1200);
+        return [`- ${label}: images/${imageFileStem(image, index)}`, instruction ? `  - 改图要求：${instruction}` : ""].filter(Boolean).join("\n");
+      })
     : [];
   return [
     `# ${cleanText(input.title, 200) || "社媒草稿"}`,
@@ -111,6 +115,14 @@ function imageFileStem(image, index) {
   if (slot > 0 && version > 0) return `slot-${slot}-v${version}`;
   if (slot > 0) return `slot-${slot}-v1`;
   return `image-${index + 1}`;
+}
+
+function imageVersionLabel(image, index) {
+  const slot = Number(image?.slot || 0);
+  const version = Number(image?.version || 1);
+  if (cleanText(image?.label, 120)) return cleanText(image.label, 120);
+  if (slot > 0) return version > 1 ? `第${slot}张 v${version} 改图` : `第${slot}张 v1 原图`;
+  return `图片 ${index + 1}`;
 }
 
 function makeCrcTable() {
@@ -277,6 +289,7 @@ module.exports = async function handler(req, res) {
               ? input.images.slice(0, MAX_DRAFT_IMAGES).map((image, index) => ({
                   slot: Number(image?.slot || 0) || null,
                   version: Number(image?.version || 0) || null,
+                  label: imageVersionLabel(image, index),
                   filenameStem: imageFileStem(image, index),
                   url: cleanText(image?.url || image, 4000),
                   editedAt: cleanText(image?.editedAt, 80),
@@ -298,12 +311,13 @@ module.exports = async function handler(req, res) {
       const url = cleanText(images[index]?.url || images[index], 4000);
       if (!url) continue;
       const stem = imageFileStem(images[index], index);
-      imageLinks.push(`${stem}: ${url}`);
+      const label = imageVersionLabel(images[index], index);
+      imageLinks.push(`${label} (${stem}): ${url}`);
       try {
         const image = await fetchImage(url);
         entries.push({ name: `${folder}/images/${stem}.${image.extension}`, data: image.data });
       } catch (error) {
-        imageLinks.push(`${stem} 下载失败：${error.message}`);
+        imageLinks.push(`${label} (${stem}) 下载失败：${error.message}`);
       }
     }
     entries.push({ name: `${folder}/image-links.txt`, data: `${imageLinks.join("\n")}\n` });
