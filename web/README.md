@@ -13,6 +13,8 @@ npm run preview -- --port 5175
 
 本地普通 Vite 预览不会运行 Vercel `/api/dashboard`，页面会自动切到样例数据。使用真实数据库时走 Vercel Serverless API。
 
+固定内容流只读取 `xhs_geo` 里已经沉淀好的内容资产和原图预览，不写库、不改库，也不主动触发云服务器脚本；只有用户点击洗稿时，前端才会调用现有生图和文案接口。
+
 ## Vercel Env
 
 在 Vercel 项目里配置：

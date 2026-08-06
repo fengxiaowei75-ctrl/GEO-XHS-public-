@@ -68,6 +68,42 @@ function cleanText(value, max = 4000) {
   return String(value || "").trim().slice(0, max);
 }
 
+function normalizeImageList(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map((item) => cleanText(item, 2000)).filter(Boolean);
+  const text = cleanText(value, 20000);
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed.map((item) => cleanText(item, 2000)).filter(Boolean);
+  } catch {
+    // Some legacy rows store image lists as comma/space separated text.
+  }
+  return text
+    .split(/[\s,，]+/)
+    .map((item) => cleanText(item, 2000))
+    .filter((item) => /^https?:\/\//i.test(item));
+}
+
+function addSourceImage(items, seen, url, source) {
+  const imageUrl = cleanText(url, 2000);
+  if (!imageUrl || seen.has(imageUrl)) return;
+  if (!/^https?:\/\//i.test(imageUrl) && !/^data:image\//i.test(imageUrl)) return;
+  seen.add(imageUrl);
+  items.push({ slot: items.length + 1, source, url: imageUrl });
+}
+
+function buildSourceImages(row, imagePrompts) {
+  const items = [];
+  const seen = new Set();
+  imagePrompts.forEach((prompt) => addSourceImage(items, seen, prompt.imageUrl, "image_analysis"));
+  normalizeImageList(row.images_list).forEach((url) => addSourceImage(items, seen, url, "images_list"));
+  addSourceImage(items, seen, row.top_image, "top_image");
+  addSourceImage(items, seen, row.video_top_image, "video_top_image");
+  addSourceImage(items, seen, row.source_image, "source_image");
+  return items.slice(0, MAX_IMAGE_PROMPTS);
+}
+
 function normalizeKnowledgePoints(value) {
   if (!value) return "";
   const rows = Array.isArray(value) ? value : [value];
@@ -148,6 +184,7 @@ function buildVisualPrompt(row, hasImagePrompts) {
 
 function notePayload(row) {
   const imagePrompts = normalizeImagePrompts(row.image_prompts);
+  const sourceImages = buildSourceImages(row, imagePrompts);
   const sourceImageCount = Number(row.source_image_count || 0);
   const suggestedImageCount = Math.max(1, Math.min(MAX_IMAGE_PROMPTS, imagePrompts.length || sourceImageCount || 1));
   return {
@@ -165,6 +202,7 @@ function notePayload(row) {
     analyzed_image_count: Number(row.analyzed_image_count || imagePrompts.length || 0),
     suggested_image_count: suggestedImageCount,
     image_prompt_warning: row.image_prompt_warning || "",
+    source_images: sourceImages,
     source: row.asset_id ? "geo_note_content_assets" : "note_details",
   };
 }
@@ -287,7 +325,11 @@ module.exports = async function handler(req, res) {
           a.cover_text_logic,
           a.layout_structure,
           a.source_image_count,
-          a.analyzed_image_count
+          a.analyzed_image_count,
+          n.images_list,
+          n.top_image,
+          n.video_top_image,
+          n.source_image
         FROM public.note_details n
         FULL JOIN latest_asset a ON a.note_id = n.note_id
         WHERE COALESCE(a.note_id, n.note_id) = $1

@@ -2436,19 +2436,752 @@ function ImageGenerationWorkflow({ data }) {
   );
 }
 
-function FixedContentFlow() {
+const fixedContentLineConfigs = [
+  {
+    id: "trend",
+    title: "蹭热点/降维科普/行业趋势解读",
+    shortTitle: "热点科普线",
+    intent: "把 GEO、AI 搜索、营销趋势拆成公共认知入口。",
+    targetPersonas: ["认知小白", "泛好奇者"],
+    groupByIndustry: false,
+    keywords: ["热点", "趋势", "科普", "入门", "小白", "一文看懂", "为什么", "AI", "GEO", "搜索"],
+  },
+  {
+    id: "scenario",
+    title: "垂直场景贴合，制造代入感",
+    shortTitle: "垂直场景线",
+    intent: "把通用 GEO 能力落到具体行业、具体角色和具体使用场景。",
+    targetPersonas: ["垂直探路者"],
+    groupByIndustry: true,
+    keywords: ["场景", "行业", "案例", "怎么做", "落地", "实操", "路径", "方法"],
+  },
+  {
+    id: "trust",
+    title: "建立专业感、信任感，降低评估成本",
+    shortTitle: "信任决策线",
+    intent: "服务高焦虑决策、管理者和代理渠道，减少评估链路。",
+    targetPersonas: ["行业焦虑决策者", "代理/渠道商"],
+    groupByIndustry: true,
+    keywords: ["信任", "转化", "决策", "成本", "评估", "避坑", "服务商", "管理者", "代理", "渠道"],
+  },
+];
+
+const fixedVerticalIndustryRules = [
+  { label: "教培/教育", terms: ["教培", "教育", "培训", "留学", "K12", "职业教育"] },
+  { label: "医疗/健康", terms: ["医疗", "医美", "健康", "口腔", "牙科", "诊所", "医院"] },
+  { label: "法律/律所", terms: ["法律", "律师", "律所", "法务", "合规"] },
+  { label: "财税/金融", terms: ["财税", "税务", "会计", "金融", "保险", "银行", "证券"] },
+  { label: "SaaS/企业服务", terms: ["SaaS", "软件", "企业服务", "CRM", "ERP", "人力", "招聘", "HR"] },
+  { label: "B2B/工业制造", terms: ["B2B", "工业", "制造", "机械", "工厂", "供应链"] },
+  { label: "电商/跨境", terms: ["电商", "跨境", "亚马逊", "淘宝", "天猫", "抖店"] },
+  { label: "本地生活", terms: ["餐饮", "酒旅", "家政", "装修", "家居", "美业", "宠物", "母婴", "房产", "汽车", "旅游"] },
+];
+
+const genericIndustryTerms = new Set([
+  "GEO",
+  "GEO营销",
+  "AI营销",
+  "数字营销",
+  "内容运营",
+  "品牌营销",
+  "企业营销",
+  "搜索营销",
+  "私域",
+  "获客",
+  "MarTech",
+  "全行业",
+  "通用",
+]);
+
+const fixedRewriteSteps = ["读取笔记资产", "创建生图任务", "轮询图片结果", "生成小红书文案", "洗稿完成"];
+
+function uniqueTextItems(items) {
+  return Array.from(new Set(items.map((item) => String(item || "").trim()).filter(Boolean)));
+}
+
+function notePersonaItems(item) {
+  return uniqueTextItems([item.primary_target_persona, ...listItems(item.target_persona_tags)]);
+}
+
+function industryTokensForNote(item) {
+  const raw = [item.primary_industry, ...listItems(item.industry_tags)].filter(Boolean).join(" / ");
+  return uniqueTextItems(raw.split(/[\/,，、\s]+/));
+}
+
+function isGenericIndustryToken(token) {
+  if (!token) return true;
+  if (genericIndustryTerms.has(token)) return true;
+  return /^(GEO|SEO|AI搜索|AI营销|数字营销|内容运营|品牌营销|企业营销|搜索营销|私域|获客|通用)/i.test(token);
+}
+
+function industryClusterForNote(item) {
+  const tokens = industryTokensForNote(item);
+  if (!tokens.length) return "全行业";
+  const joined = tokens.join(" ");
+  const explicitAll = tokens.some((token) => token.includes("全行业") || token.includes("通用"));
+  if (explicitAll) return "全行业";
+  const matchedRule = fixedVerticalIndustryRules.find((rule) => rule.terms.some((term) => joined.includes(term)));
+  if (matchedRule) return matchedRule.label;
+  const specific = tokens.find((token) => !isGenericIndustryToken(token));
+  return specific || "全行业";
+}
+
+function noteKeywordText(item) {
+  return [
+    item.title,
+    noteContentText(item),
+    item.core_topic_category,
+    item.true_pain_label,
+    item.pain_description,
+    item.business_logic,
+    item.content_logic,
+    arrayText(item.hook_types),
+    item.funnel_role,
+    item.primary_industry,
+    arrayText(item.industry_tags),
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function noteMatchesPersonas(item, personas) {
+  const notePersonas = notePersonaItems(item);
+  return personas.some((persona) => notePersonas.includes(persona));
+}
+
+function fixedLineScore(line, item) {
+  let score = 0;
+  if (noteMatchesPersonas(item, line.targetPersonas)) score += 12;
+  const keywordText = noteKeywordText(item);
+  score += line.keywords.filter((keyword) => keywordText.includes(keyword)).length * 2;
+  if (line.id === "trend" && item.funnel_role === "曝光") score += 2;
+  if (line.id === "scenario" && industryClusterForNote(item) !== "全行业") score += 3;
+  if (line.id === "trust" && ["信任", "转化"].includes(item.funnel_role)) score += 5;
+  return score;
+}
+
+function sortHotNotes(rows) {
+  return [...rows].sort((a, b) => {
+    const interactionDelta = Number(b.interaction_score || 0) - Number(a.interaction_score || 0);
+    if (interactionDelta) return interactionDelta;
+    const freshDelta = Number(b.fresh_hot_score || 0) - Number(a.fresh_hot_score || 0);
+    if (freshDelta) return freshDelta;
+    return String(b.note_date || b.publish_time || "").localeCompare(String(a.note_date || a.publish_time || ""));
+  });
+}
+
+function dedupeNotes(rows) {
+  const seen = new Set();
+  return rows.filter((item) => {
+    const key = item?.note_id;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function groupFixedNotes(line, notes) {
+  if (!line.groupByIndustry) {
+    return [{ id: "all", label: "今日通用池", notes: notes.slice(0, 18) }];
+  }
+  const grouped = new Map();
+  notes.forEach((note) => {
+    const label = industryClusterForNote(note);
+    if (!grouped.has(label)) grouped.set(label, []);
+    grouped.get(label).push(note);
+  });
+  return Array.from(grouped.entries())
+    .map(([label, groupNotes]) => ({ id: label, label, notes: sortHotNotes(groupNotes).slice(0, 12) }))
+    .sort((a, b) => {
+      if (a.label === "全行业" && b.label !== "全行业") return -1;
+      if (b.label === "全行业" && a.label !== "全行业") return 1;
+      return Number(b.notes[0]?.interaction_score || 0) - Number(a.notes[0]?.interaction_score || 0);
+    });
+}
+
+function buildFixedContentLines(rows) {
+  const source = sortHotNotes(dedupeNotes(rows || []));
+  return fixedContentLineConfigs.map((line) => {
+    const matched = source
+      .map((note) => ({ note, score: fixedLineScore(line, note) }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score || Number(b.note.interaction_score || 0) - Number(a.note.interaction_score || 0))
+      .map((item) => item.note);
+    const fallbackSize = line.id === "trend" ? 24 : 16;
+    const notes = matched.length ? matched.slice(0, 80) : source.slice(0, fallbackSize);
+    return {
+      ...line,
+      notes,
+      groups: groupFixedNotes(line, notes),
+    };
+  });
+}
+
+function sourceImagesForNote(note) {
+  const items = [];
+  const seen = new Set();
+  function add(url, source = "image_analysis") {
+    const imageUrl = String(url || "").trim();
+    if (!imageUrl || seen.has(imageUrl)) return;
+    seen.add(imageUrl);
+    items.push({ url: imageUrl, source, slot: items.length + 1 });
+  }
+  (note?.source_images || []).forEach((image) => add(image.url || image.imageUrl, image.source || "source_image"));
+  normalizeWorkflowImagePrompts(note?.image_prompts).forEach((prompt) => add(prompt.imageUrl, "image_analysis"));
+  return items;
+}
+
+function firstSourceImageUrl(note) {
+  return sourceImagesForNote(note)[0]?.url || "";
+}
+
+function fixedProgressStepClass(progress, index) {
+  if (progress.status === "failed" && index === progress.activeStep) return "failed";
+  if (progress.status === "done" || index < progress.activeStep) return "done";
+  if (index === progress.activeStep && progress.status !== "idle") return "active";
+  return "";
+}
+
+function FixedContentFlow({ data }) {
+  const fixedRows = useMemo(() => {
+    const rows = data?.fixedContent?.notes?.length ? data.fixedContent.notes : data?.contentInsight?.noteAnalysis || data?.topFresh || [];
+    return rows || [];
+  }, [data]);
+  const lines = useMemo(() => buildFixedContentLines(fixedRows), [fixedRows]);
+  const [selectedLineId, setSelectedLineId] = useState("trend");
+  const [selectedGroupId, setSelectedGroupId] = useState("");
+  const [selectedNoteId, setSelectedNoteId] = useState("");
+  const [noteDetail, setNoteDetail] = useState(null);
+  const [loadingNoteDetail, setLoadingNoteDetail] = useState(false);
+  const [detailMessage, setDetailMessage] = useState("");
+  const [useSourceReference, setUseSourceReference] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [progress, setProgress] = useState({ status: "idle", activeStep: 0, message: "选择一条候选笔记后开始洗稿" });
+  const [runningImageResult, setRunningImageResult] = useState(null);
+  const [fixedResult, setFixedResult] = useState(null);
+  const [resultOpen, setResultOpen] = useState(false);
+  const [previewImage, setPreviewImage] = useState(null);
+
+  const selectedLine = lines.find((line) => line.id === selectedLineId) || lines[0] || fixedContentLineConfigs[0];
+  const groups = selectedLine.groups || [];
+  const selectedGroup = groups.find((group) => group.id === selectedGroupId) || groups[0] || { id: "", label: "", notes: [] };
+  const visibleNotes = selectedGroup.notes || [];
+  const selectedNote = visibleNotes.find((note) => note.note_id === selectedNoteId) || visibleNotes[0] || null;
+  const sourceImages = sourceImagesForNote(noteDetail);
+  const referenceUrl = useSourceReference ? firstSourceImageUrl(noteDetail) : "";
+  const selectedForm = noteDetail ? imageWorkflowFormFromNote(noteDetail, emptyImageWorkflowForm) : null;
+  const selectedImageCount = selectedForm ? normalizeWorkflowImageCount(selectedForm.imageCount) : 1;
+
+  useEffect(() => {
+    if (!lines.some((line) => line.id === selectedLineId)) {
+      setSelectedLineId(lines[0]?.id || "trend");
+      setSelectedGroupId("");
+      setSelectedNoteId("");
+    }
+  }, [lines, selectedLineId]);
+
+  useEffect(() => {
+    setSelectedGroupId("");
+    setSelectedNoteId("");
+  }, [selectedLineId]);
+
+  useEffect(() => {
+    setSelectedNoteId("");
+  }, [selectedGroupId]);
+
+  useEffect(() => {
+    if (!selectedNote?.note_id) {
+      setNoteDetail(null);
+      setDetailMessage("");
+      return undefined;
+    }
+    let alive = true;
+    setLoadingNoteDetail(true);
+    setDetailMessage("");
+    requestJson("/api/image-note", {
+      method: "POST",
+      body: JSON.stringify({ noteId: selectedNote.note_id }),
+    })
+      .then((payload) => {
+        if (!alive) return;
+        setNoteDetail(payload.note || null);
+      })
+      .catch((error) => {
+        if (!alive) return;
+        setNoteDetail(null);
+        setDetailMessage(error.message || "读取笔记详情失败");
+      })
+      .finally(() => {
+        if (alive) setLoadingNoteDetail(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [selectedNote?.note_id]);
+
+  async function ensureNoteDetail(noteId) {
+    if (noteDetail?.note_id === noteId) return noteDetail;
+    setLoadingNoteDetail(true);
+    try {
+      const payload = await requestJson("/api/image-note", {
+        method: "POST",
+        body: JSON.stringify({ noteId }),
+      });
+      setNoteDetail(payload.note || null);
+      return payload.note || null;
+    } finally {
+      setLoadingNoteDetail(false);
+    }
+  }
+
+  function updateProgress(activeStep, message, status = "running") {
+    setProgress({ status, activeStep, message });
+  }
+
+  async function runFixedRewrite() {
+    if (!selectedNote?.note_id) {
+      setProgress({ status: "failed", activeStep: 0, message: "请先选择一条候选笔记" });
+      return;
+    }
+    setRunning(true);
+    setFixedResult(null);
+    setRunningImageResult(null);
+    setResultOpen(false);
+    try {
+      updateProgress(0, "读取笔记详情、内容资产字段和原图提示词");
+      const detail = await ensureNoteDetail(selectedNote.note_id);
+      const form = imageWorkflowFormFromNote(detail || {}, emptyImageWorkflowForm);
+      if (!form.noteId) throw new Error("没有读取到可用笔记资产");
+      if (!hasWorkflowPrompt(form)) throw new Error("该笔记缺少可用生图提示词，需要先完成图片解析/内容资产沉淀");
+
+      const startedAt = Date.now();
+      const imageCount = normalizeWorkflowImageCount(form.imageCount);
+      const imagePrompts = normalizeWorkflowImagePrompts(form.imagePrompts).slice(0, imageCount);
+      const fixedReferenceImage = useSourceReference ? firstSourceImageUrl(detail) : "";
+      updateProgress(1, fixedReferenceImage ? "创建 Duomi 生图任务，已带入首张原图垫图" : "创建 Duomi 生图任务");
+      const payload = await requestJson("/api/image-generate", {
+        method: "POST",
+        body: JSON.stringify({
+          noteId: form.noteId.trim(),
+          title: form.title,
+          content: form.content,
+          targetPersona: form.targetPersona,
+          userPain: form.userPain,
+          businessLogic: form.businessLogic,
+          businessKnowledge: form.businessKnowledge,
+          imagePrompt: form.imagePrompt,
+          imagePrompts,
+          unifiedVisualStyle: form.unifiedVisualStyle !== false,
+          referenceImage: fixedReferenceImage,
+          size: form.size,
+          imageCount,
+        }),
+      });
+
+      const baseResult = { ...payload, latencyMs: Date.now() - startedAt };
+      setRunningImageResult(baseResult);
+      let imageResult = baseResult;
+      if ((payload.images || []).length < imageCount) {
+        const taskState = (payload.tasks?.length ? payload.tasks : [{ slot: 1, taskId: payload.taskId, images: payload.images || [] }]).map((task, index) => ({
+          slot: Number(task.slot || index + 1),
+          taskId: task.taskId,
+          images: task.images || [],
+          status: task.images?.length ? "succeeded" : "processing",
+        }));
+        if (!taskState.some((task) => task.taskId)) throw new Error("图像生成任务创建成功，但没有返回任务 ID");
+        updateProgress(2, "任务已创建，开始轮询图片结果");
+
+        for (let attempt = 0; attempt < maxImageTaskPollAttempts; attempt += 1) {
+          await wait(imageTaskPollDelay(attempt));
+          for (let index = 0; index < taskState.length; index += 1) {
+            const task = taskState[index];
+            if (!task.taskId || task.images?.length) continue;
+            const taskPayload = await requestJson(`/api/image-task?taskId=${encodeURIComponent(task.taskId)}`);
+            taskState[index] = {
+              ...task,
+              status: taskPayload.status,
+              images: (taskPayload.images || []).map((image) => ({ ...image, slot: task.slot })),
+            };
+            if (taskPayload.status === "failed") throw new Error(taskPayload.error || `第${task.slot}张图生成任务失败`);
+          }
+          const images = taskState.flatMap((task) => (task.images || []).map((image) => ({ ...image, slot: task.slot })));
+          imageResult = {
+            ...baseResult,
+            tasks: taskState.map((task) => ({ ...task })),
+            images,
+            status: images.length >= imageCount ? "succeeded" : "processing",
+            model: payload.model,
+            size: payload.size,
+            prompt: payload.prompt,
+            logWarning: payload.logWarning,
+            latencyMs: Date.now() - startedAt,
+          };
+          setRunningImageResult(imageResult);
+          if (images.length >= imageCount) break;
+          const pendingLabels = taskState.filter((task) => !task.images?.length).map((task) => `第${task.slot}张${imageTaskStatusLabel(task.status)}`);
+          updateProgress(2, pendingLabels.join("，") || "图片生成中");
+        }
+        if ((imageResult.images || []).length < imageCount) throw new Error("图像生成仍在处理中，请稍后重新点击洗稿或检查任务状态");
+      }
+
+      updateProgress(3, "图片已生成，开始调用豆包生成小红书文案");
+      const socialDraft = await requestJson("/api/social-generate", {
+        method: "POST",
+        body: JSON.stringify({
+          platform: "xhs",
+          noteId: form.noteId.trim(),
+          title: form.title,
+          content: form.content,
+          targetPersona: form.targetPersona,
+          userPain: form.userPain,
+          businessLogic: form.businessLogic,
+          businessKnowledge: form.businessKnowledge,
+          imagePrompt: promptPayloadForSave(form),
+          images: generatedImagesForSave(imageResult),
+        }),
+      });
+
+      const finalResult = {
+        note: selectedNote,
+        form,
+        imageResult,
+        socialDraft,
+        sourceImages: sourceImagesForNote(detail),
+        producedAt: new Date().toISOString(),
+      };
+      setFixedResult(finalResult);
+      setProgress({ status: "done", activeStep: 4, message: "洗稿完成，可以查看小红书文案和生成图片" });
+      const compactResult = compactImageResult(imageResult);
+      if (generatedImagesForSave(compactResult).length) {
+        upsertImageWorkflowHistoryItem(
+          {
+            id: imageResultGroupId(compactResult) || `fixed-content-${Date.now()}`,
+            createdAt: finalResult.producedAt,
+            form: historyFormSnapshot(form),
+            result: compactResult,
+            socialPlatform: "xhs",
+            socialDraft: compactSocialDraft(socialDraft),
+          },
+          [],
+        );
+      }
+    } catch (error) {
+      setProgress({ status: "failed", activeStep: Math.min(progress.activeStep || 0, fixedRewriteSteps.length - 1), message: error.message || "洗稿失败" });
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function copyFixedDraft() {
+    const content = fixedResult?.socialDraft?.content || "";
+    if (!content) return;
+    try {
+      await navigator.clipboard?.writeText(content);
+      setProgress((current) => ({ ...current, message: "小红书文案已复制" }));
+    } catch {
+      setProgress((current) => ({ ...current, message: "复制失败，请手动选中文案" }));
+    }
+  }
+
+  async function saveFixedDraftPackage() {
+    if (!fixedResult) return;
+    setSavingDraft(true);
+    try {
+      const response = await fetch("/api/draft-package", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platform: "xhs",
+          producedAt: fixedResult.producedAt,
+          noteId: fixedResult.form.noteId,
+          title: fixedResult.form.title,
+          content: fixedResult.form.content,
+          targetPersona: fixedResult.form.targetPersona,
+          userPain: fixedResult.form.userPain,
+          businessLogic: fixedResult.form.businessLogic,
+          businessKnowledge: fixedResult.form.businessKnowledge,
+          imagePrompt: promptPayloadForSave(fixedResult.form),
+          socialContent: fixedResult.socialDraft?.content || "",
+          images: generatedImagesForSave(fixedResult.imageResult),
+        }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `HTTP ${response.status}`);
+      }
+      const blob = await response.blob();
+      const filename = filenameFromDisposition(response.headers.get("content-disposition"), "固定内容流_小红书草稿.zip");
+      downloadBlob(blob, filename);
+      setProgress((current) => ({ ...current, message: "草稿包已生成下载" }));
+    } catch (error) {
+      setProgress((current) => ({ ...current, message: error.message || "草稿包保存失败" }));
+    } finally {
+      setSavingDraft(false);
+    }
+  }
+
+  if (resultOpen && fixedResult) {
+    const images = imageSlotItems(fixedResult.imageResult).filter((slot) => slot.image?.url);
+    return (
+      <section className="fixed-content-flow">
+        <section className="panel fixed-result-panel">
+          <SectionHeader
+            icon={CheckCircle2}
+            title="洗稿效果"
+            action={<StatusPill tone="green">洗稿完成</StatusPill>}
+          />
+          <div className="fixed-result-head">
+            <div>
+              <strong>{fixedResult.form.title || fixedResult.form.noteId}</strong>
+              <span>{fixedResult.form.noteId} · {formatDateTimeSecond(fixedResult.producedAt)}</span>
+            </div>
+            <div className="header-actions">
+              <button className="copy-button" type="button" onClick={() => setResultOpen(false)}>
+                返回内容线
+              </button>
+              <button className="copy-button" type="button" onClick={copyFixedDraft}>
+                复制文案
+              </button>
+              <button className="primary-button" type="button" onClick={saveFixedDraftPackage} disabled={savingDraft}>
+                <Save size={15} />
+                {savingDraft ? "保存中" : "下载草稿包"}
+              </button>
+            </div>
+          </div>
+          <div className="fixed-progress-message">{progress.message}</div>
+          <div className="fixed-result-grid">
+            <section className="fixed-social-output">
+              <SectionHeader icon={FileText} title="小红书文案" action={fixedResult.socialDraft?.model ? <StatusPill tone="green">{fixedResult.socialDraft.model}</StatusPill> : null} />
+              <textarea readOnly value={fixedResult.socialDraft?.content || ""} rows={22} />
+            </section>
+            <section className="fixed-image-output">
+              <SectionHeader icon={ImagePlus} title="生成图片" action={<StatusPill tone="neutral">{formatNumber(images.length)} 张</StatusPill>} />
+              <div className="fixed-result-images">
+                {images.map((slot) => (
+                  <button key={`${slot.slot}-${slot.image.url}`} type="button" onClick={() => setPreviewImage(slot.image)}>
+                    <img src={slot.image.url} alt={`固定内容流生成图 ${slot.slot}`} />
+                    <span>第{slot.slot}张</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          </div>
+        </section>
+        {previewImage ? (
+          <div className="image-preview-backdrop" onClick={() => setPreviewImage(null)} role="presentation">
+            <div className="image-preview-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+              <button className="icon-button" type="button" onClick={() => setPreviewImage(null)} aria-label="关闭图片预览">
+                <XCircle size={18} />
+              </button>
+              <img src={previewImage.url} alt="图片预览" />
+            </div>
+          </div>
+        ) : null}
+      </section>
+    );
+  }
+
   return (
     <section className="fixed-content-flow">
-      <section className="panel">
-        <SectionHeader icon={Layers3} title="固定内容流" action={<StatusPill tone="neutral">Content</StatusPill>} />
-        <div className="fixed-content-board">
-          <div className="fixed-content-empty">
-            <Layers3 size={28} />
-            <strong>固定内容流</strong>
-            <span>待接入固定内容生产配置</span>
+      <section className="fixed-content-layout">
+        <section className="panel fixed-line-panel">
+          <SectionHeader icon={Layers3} title="固定内容线" action={<StatusPill tone="neutral">近30天</StatusPill>} />
+          <div className="fixed-line-stack">
+            {lines.map((line) => (
+              <button
+                key={line.id}
+                className={`fixed-line-card ${selectedLine.id === line.id ? "active" : ""}`}
+                type="button"
+                onClick={() => setSelectedLineId(line.id)}
+              >
+                <div>
+                  <span>{line.shortTitle}</span>
+                  <strong>{line.title}</strong>
+                  <p>{line.intent}</p>
+                </div>
+                <em>{formatNumber(line.notes.length)} 条</em>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel fixed-note-panel">
+          <SectionHeader
+            icon={Filter}
+            title={selectedLine.shortTitle}
+            action={<StatusPill tone="blue">{selectedLine.targetPersonas.join(" / ")}</StatusPill>}
+          />
+          <div className="fixed-cluster-tabs">
+            {groups.map((group) => (
+              <button
+                key={group.id}
+                className={selectedGroup.id === group.id ? "active" : ""}
+                type="button"
+                onClick={() => setSelectedGroupId(group.id)}
+              >
+                <span>{group.label}</span>
+                <em>{formatNumber(group.notes.length)}</em>
+              </button>
+            ))}
+          </div>
+          <div className="fixed-note-list">
+            {visibleNotes.length ? (
+              visibleNotes.map((note) => (
+                <article
+                  key={note.note_id}
+                  className={`fixed-note-card ${selectedNote?.note_id === note.note_id ? "active" : ""}`}
+                  onClick={() => setSelectedNoteId(note.note_id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") setSelectedNoteId(note.note_id);
+                  }}
+                  role="button"
+                  tabIndex="0"
+                >
+                  <div className="fixed-note-top">
+                    <StatusPill tone={note.funnel_role === "转化" ? "green" : note.funnel_role === "信任" ? "blue" : "neutral"}>
+                      {note.funnel_role || "未标注漏斗"}
+                    </StatusPill>
+                    <span>{formatDayLabel(note.note_date || note.publish_time)}</span>
+                  </div>
+                  <strong>{note.title || note.note_id}</strong>
+                  <p>{textPreview(noteContentText(note), 128) || "-"}</p>
+                  <div className="fixed-note-tags">
+                    <span>{note.primary_target_persona || "未标注人群"}</span>
+                    <span>{selectedLine.groupByIndustry ? industryClusterForNote(note) : note.core_topic_category || "通用内容"}</span>
+                  </div>
+                  <div className="daily-note-metrics">
+                    <NoteMetricChip label="互动" value={note.interaction_score} />
+                    <NoteMetricChip label="赞" value={note.like_count} />
+                    <NoteMetricChip label="藏" value={note.collected_count} />
+                    <NoteMetricChip label="评" value={note.comments_count} />
+                  </div>
+                </article>
+              ))
+            ) : (
+              <div className="fixed-content-empty">
+                <Layers3 size={28} />
+                <strong>暂无候选笔记</strong>
+                <span>这条内容线近30天没有命中现有标签</span>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="panel fixed-detail-panel">
+          <SectionHeader
+            icon={Target}
+            title="笔记资产与执行"
+            action={<StatusPill tone={running ? "amber" : fixedResult ? "green" : "neutral"}>{running ? "处理中" : fixedResult ? "已产出" : "待洗稿"}</StatusPill>}
+          />
+          {selectedNote ? (
+            <>
+              <div className="fixed-selected-head">
+                <div>
+                  <strong>{selectedNote.title || selectedNote.note_id}</strong>
+                  <span>{selectedNote.note_id} · {selectedNote.author_nickname || "-"}</span>
+                </div>
+                <button className="primary-button" type="button" onClick={runFixedRewrite} disabled={running || loadingNoteDetail}>
+                  <Sparkles size={15} />
+                  {running ? "洗稿中" : "一键洗稿"}
+                </button>
+              </div>
+
+              <div className="fixed-original-images">
+                <div className="fixed-subhead">
+                  <strong>原笔记图片</strong>
+                  <label className="image-style-toggle">
+                    <input
+                      checked={useSourceReference}
+                      type="checkbox"
+                      onChange={(event) => setUseSourceReference(event.target.checked)}
+                      disabled={!sourceImages.length || running}
+                    />
+                    <span>首图垫图</span>
+                  </label>
+                </div>
+                {sourceImages.length ? (
+                  <div className="fixed-source-image-grid">
+                    {sourceImages.map((image) => (
+                      <button key={image.url} type="button" onClick={() => setPreviewImage(image)}>
+                        <img src={image.url} alt={`原笔记图片 ${image.slot}`} />
+                        <span>{image.slot}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="fixed-source-empty">{loadingNoteDetail ? "原图读取中" : "暂无原图预览"}</div>
+                )}
+                {referenceUrl ? <small>洗稿时会把第1张原图作为垫图传入。</small> : null}
+              </div>
+
+              <div className="fixed-asset-fields">
+                <DetailTextBlock title="目标人群与痛点">
+                  <p>
+                    <strong>{selectedNote.primary_target_persona || selectedForm?.targetPersona || "未标注"}</strong>
+                  </p>
+                  <p>{selectedNote.true_pain_label || selectedForm?.userPain || "-"}</p>
+                  <p>{selectedNote.pain_description || selectedNote.pain_evidence || ""}</p>
+                </DetailTextBlock>
+                <DetailTextBlock title="可复用逻辑">
+                  <p>{selectedNote.business_logic || selectedNote.content_logic || selectedForm?.businessLogic || "-"}</p>
+                  <p>{firstStructuredText(selectedNote.reusable_angles, selectedNote.funnel_role_reason || "")}</p>
+                </DetailTextBlock>
+                <DetailTextBlock title="视觉默认值">
+                  <p>{selectedForm ? imagePromptSummary(selectedForm) : loadingNoteDetail ? "读取中" : "-"}</p>
+                  <p>{selectedNote.visual_group_style_prompt || selectedNote.layout_structure || ""}</p>
+                </DetailTextBlock>
+              </div>
+
+              <div className="fixed-progress-panel">
+                <div className="fixed-progress-steps">
+                  {fixedRewriteSteps.map((step, index) => (
+                    <span key={step} className={fixedProgressStepClass(progress, index)}>
+                      {fixedProgressStepClass(progress, index) === "done" ? <CheckCircle2 size={14} /> : <Clock3 size={14} />}
+                      {step}
+                    </span>
+                  ))}
+                </div>
+                <div className={`fixed-progress-message ${progress.status === "failed" ? "failed" : ""}`}>{progress.message}</div>
+                {runningImageResult ? (
+                  <div className="fixed-running-slots">
+                    {imageSlotItems(runningImageResult)
+                      .slice(0, selectedImageCount)
+                      .map((slot) => (
+                        <div key={slot.slot} className={slot.image?.url ? "done" : ""}>
+                          {slot.image?.url ? <img src={slot.image.url} alt={`生成中图片 ${slot.slot}`} /> : <span>{imageTaskStatusLabel(slot.status === "empty" ? "processing" : slot.status)}</span>}
+                        </div>
+                      ))}
+                  </div>
+                ) : null}
+                {fixedResult && progress.status === "done" ? (
+                  <button className="primary-button" type="button" onClick={() => setResultOpen(true)}>
+                    查看洗稿效果
+                  </button>
+                ) : null}
+              </div>
+              {detailMessage ? <div className="admin-message">{detailMessage}</div> : null}
+            </>
+          ) : (
+            <div className="fixed-content-empty">
+              <Layers3 size={28} />
+              <strong>先选择候选笔记</strong>
+              <span>左侧按内容线和行业聚类展示近30天互动权重最高的内容</span>
+            </div>
+          )}
+        </section>
+      </section>
+      {previewImage ? (
+        <div className="image-preview-backdrop" onClick={() => setPreviewImage(null)} role="presentation">
+          <div className="image-preview-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <button className="icon-button" type="button" onClick={() => setPreviewImage(null)} aria-label="关闭图片预览">
+              <XCircle size={18} />
+            </button>
+            <img src={previewImage.url} alt="图片预览" />
           </div>
         </div>
-      </section>
+      ) : null}
     </section>
   );
 }
@@ -4625,7 +5358,7 @@ export default function App() {
               <ImageGenerationWorkflow data={data} />
             </div>
           ) : null}
-          {activeView === "fixedContent" ? <FixedContentFlow /> : null}
+          {activeView === "fixedContent" ? <FixedContentFlow data={data} /> : null}
           {activeView === "ops" ? <OpsDashboard data={data} apiDate={apiDate} onApiDateChange={handleApiDateChange} /> : null}
           {activeView === "models" ? <ModelConfigView data={data} /> : null}
           {activeView === "admin" ? <AdminConfigView currentUser={currentUser} permissionCatalog={permissionCatalog} /> : null}

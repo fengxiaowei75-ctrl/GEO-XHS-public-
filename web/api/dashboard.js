@@ -474,6 +474,7 @@ module.exports = async function handler(req, res) {
       contentNoteAnalysis,
       contentTrendDaily,
       contentSparklineDaily,
+      fixedContentNotes,
       opsOverviewRows,
       apiStatusSummary,
       apiUsageHourly,
@@ -868,6 +869,80 @@ module.exports = async function handler(req, res) {
         FROM days d
         LEFT JOIN agg a ON a.bucket_date = d.bucket_date
         ORDER BY d.bucket_date
+        `,
+      ),
+      query(
+        client,
+        `
+        WITH bounds AS (
+          SELECT COALESCE(max(${contentDateColumn})::date, CURRENT_DATE) AS end_day
+          FROM public.geo_note_content_assets a
+          LEFT JOIN public.note_details n ON n.note_id = a.note_id
+          WHERE a.analysis_status = 'success'
+            AND ${contentDateColumn} IS NOT NULL
+        )
+        SELECT
+          a.note_id,
+          COALESCE(
+            NULLIF(a.title, ''),
+            NULLIF(n.title, ''),
+            NULLIF(n.source_title, ''),
+            NULLIF(left(trim(regexp_replace(COALESCE(a.content, n.content, n.source_content, ''), '[[:space:]]+', ' ', 'g')), 80), ''),
+            a.note_id
+          ) AS title,
+          left(trim(regexp_replace(COALESCE(a.content, n.content, n.source_content, ''), '[[:space:]]+', ' ', 'g')), 720) AS content_excerpt,
+          a.author_nickname,
+          ${contentDateColumn} AS note_date,
+          n.fetched_at AS captured_at,
+          a.publish_time,
+          a.note_type,
+          a.core_topic_category,
+          COALESCE(NULLIF(trim(a.primary_target_persona), ''), '未标注') AS primary_target_persona,
+          a.target_persona_tags,
+          a.target_persona_reason,
+          a.primary_industry,
+          a.industry_tags,
+          a.funnel_role,
+          a.funnel_role_reason,
+          a.like_count,
+          a.collected_count,
+          a.comments_count,
+          a.share_count,
+          a.interaction_score,
+          round(a.fresh_hot_score::numeric, 2)::float AS fresh_hot_score,
+          a.true_pain_label,
+          a.pain_description,
+          a.pain_evidence,
+          a.pain_authenticity,
+          round(a.pain_confidence::numeric, 2)::float AS pain_confidence,
+          round(a.business_relevance_score::numeric, 2)::float AS business_relevance_score,
+          round(a.llm_confidence::numeric, 2)::float AS llm_confidence,
+          a.knowledge_points,
+          a.reusable_angles,
+          a.title_templates,
+          a.business_logic,
+          a.content_logic,
+          a.hook_types,
+          a.cta_strategy,
+          a.risk_flags,
+          a.visual_group_style_prompt,
+          a.visual_main_colors,
+          a.visual_emotion,
+          a.information_density_level,
+          a.information_density_reason,
+          a.layout_structure,
+          a.cover_text_logic,
+          left(COALESCE(a.asset_text, ''), 1200) AS asset_text_excerpt,
+          a.note_url
+        FROM public.geo_note_content_assets a
+        LEFT JOIN public.note_details n ON n.note_id = a.note_id
+        CROSS JOIN bounds b
+        WHERE a.analysis_status = 'success'
+          AND ${contentDateColumn} IS NOT NULL
+          AND ${contentDateColumn} >= b.end_day - interval '29 days'
+          AND ${contentDateColumn} < b.end_day + interval '1 day'
+        ORDER BY a.interaction_score DESC NULLS LAST, a.fresh_hot_score DESC NULLS LAST, ${contentDateColumn} DESC NULLS LAST
+        LIMIT 240
         `,
       ),
       query(
@@ -1497,6 +1572,12 @@ module.exports = async function handler(req, res) {
         : null,
       queueStatus: canContent ? queueStatus : [],
       topFresh: canContent ? topFresh : [],
+      fixedContent: canContent
+        ? {
+            windowDays: 30,
+            notes: fixedContentNotes,
+          }
+        : { windowDays: 30, notes: [] },
       personaDistribution: canContent ? personaDistribution : [],
       funnelDistribution: canContent ? funnelDistribution : [],
       industryDistribution: canContent ? industryDistribution : [],
