@@ -1314,6 +1314,8 @@ const socialPlatformOptions = [
 const socialPlatformLabels = Object.fromEntries(socialPlatformOptions.map((item) => [item.value, item.label]));
 const imageWorkflowHistoryKey = "geo:image-generation-workflow-history:v1";
 const maxImageWorkflowHistory = 12;
+const fixedContentHistoryKey = "geo:fixed-content-workflow-history:v1";
+const maxFixedContentHistory = 24;
 const maxWorkflowImages = 10;
 const maxImageTaskPollAttempts = 24;
 
@@ -1668,6 +1670,35 @@ function upsertImageWorkflowHistoryItem(item, currentItems = []) {
   const mergedItem = existing ? { ...item, createdAt: existing.createdAt || item.createdAt, updatedAt: item.createdAt } : item;
   const next = [mergedItem, ...source.filter((historyItem) => historyItem.id !== item.id)].slice(0, maxImageWorkflowHistory);
   writeImageWorkflowHistory(next);
+  return next;
+}
+
+function readFixedContentHistory() {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(fixedContentHistoryKey) || "[]");
+    return Array.isArray(parsed) ? parsed.filter((item) => generatedImagesForSave(item?.result).length).slice(0, maxFixedContentHistory) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeFixedContentHistory(items) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(fixedContentHistoryKey, JSON.stringify(items.slice(0, maxFixedContentHistory)));
+  } catch {
+    // Browser storage can fail when image URLs or drafts are too large; the UI still keeps current state.
+  }
+}
+
+function upsertFixedContentHistoryItem(item, currentItems = []) {
+  const storedItems = readFixedContentHistory();
+  const source = storedItems.length ? storedItems : currentItems;
+  const existing = source.find((historyItem) => historyItem.id === item.id);
+  const mergedItem = existing ? { ...item, createdAt: existing.createdAt || item.createdAt, updatedAt: item.createdAt } : item;
+  const next = [mergedItem, ...source.filter((historyItem) => historyItem.id !== item.id)].slice(0, maxFixedContentHistory);
+  writeFixedContentHistory(next);
   return next;
 }
 
@@ -2443,7 +2474,6 @@ const fixedContentLineConfigs = [
     shortTitle: "热点科普线",
     intent: "把 GEO、AI 搜索、营销趋势拆成公共认知入口。",
     targetPersonas: ["认知小白", "泛好奇者"],
-    groupByIndustry: false,
     keywords: ["热点", "趋势", "科普", "入门", "小白", "一文看懂", "为什么", "AI", "GEO", "搜索"],
   },
   {
@@ -2452,7 +2482,6 @@ const fixedContentLineConfigs = [
     shortTitle: "垂直场景线",
     intent: "把通用 GEO 能力落到具体行业、具体角色和具体使用场景。",
     targetPersonas: ["垂直探路者"],
-    groupByIndustry: true,
     keywords: ["场景", "行业", "案例", "怎么做", "落地", "实操", "路径", "方法"],
   },
   {
@@ -2461,37 +2490,9 @@ const fixedContentLineConfigs = [
     shortTitle: "信任决策线",
     intent: "服务高焦虑决策、管理者和代理渠道，减少评估链路。",
     targetPersonas: ["行业焦虑决策者", "代理/渠道商"],
-    groupByIndustry: true,
     keywords: ["信任", "转化", "决策", "成本", "评估", "避坑", "服务商", "管理者", "代理", "渠道"],
   },
 ];
-
-const fixedVerticalIndustryRules = [
-  { label: "教培/教育", terms: ["教培", "教育", "培训", "留学", "K12", "职业教育"] },
-  { label: "医疗/健康", terms: ["医疗", "医美", "健康", "口腔", "牙科", "诊所", "医院"] },
-  { label: "法律/律所", terms: ["法律", "律师", "律所", "法务", "合规"] },
-  { label: "财税/金融", terms: ["财税", "税务", "会计", "金融", "保险", "银行", "证券"] },
-  { label: "SaaS/企业服务", terms: ["SaaS", "软件", "企业服务", "CRM", "ERP", "人力", "招聘", "HR"] },
-  { label: "B2B/工业制造", terms: ["B2B", "工业", "制造", "机械", "工厂", "供应链"] },
-  { label: "电商/跨境", terms: ["电商", "跨境", "亚马逊", "淘宝", "天猫", "抖店"] },
-  { label: "本地生活", terms: ["餐饮", "酒旅", "家政", "装修", "家居", "美业", "宠物", "母婴", "房产", "汽车", "旅游"] },
-];
-
-const genericIndustryTerms = new Set([
-  "GEO",
-  "GEO营销",
-  "AI营销",
-  "数字营销",
-  "内容运营",
-  "品牌营销",
-  "企业营销",
-  "搜索营销",
-  "私域",
-  "获客",
-  "MarTech",
-  "全行业",
-  "通用",
-]);
 
 const fixedRewriteSteps = ["读取笔记资产", "创建生图任务", "轮询图片结果", "生成小红书文案", "洗稿完成"];
 const fixedImageSizeOptions = [
@@ -2506,29 +2507,6 @@ function uniqueTextItems(items) {
 
 function notePersonaItems(item) {
   return uniqueTextItems([item.primary_target_persona, ...listItems(item.target_persona_tags)]);
-}
-
-function industryTokensForNote(item) {
-  const raw = [item.primary_industry, ...listItems(item.industry_tags)].filter(Boolean).join(" / ");
-  return uniqueTextItems(raw.split(/[\/,，、\s]+/));
-}
-
-function isGenericIndustryToken(token) {
-  if (!token) return true;
-  if (genericIndustryTerms.has(token)) return true;
-  return /^(GEO|SEO|AI搜索|AI营销|数字营销|内容运营|品牌营销|企业营销|搜索营销|私域|获客|通用)/i.test(token);
-}
-
-function industryClusterForNote(item) {
-  const tokens = industryTokensForNote(item);
-  if (!tokens.length) return "全行业";
-  const joined = tokens.join(" ");
-  const explicitAll = tokens.some((token) => token.includes("全行业") || token.includes("通用"));
-  if (explicitAll) return "全行业";
-  const matchedRule = fixedVerticalIndustryRules.find((rule) => rule.terms.some((term) => joined.includes(term)));
-  if (matchedRule) return matchedRule.label;
-  const specific = tokens.find((token) => !isGenericIndustryToken(token));
-  return specific || "全行业";
 }
 
 function noteKeywordText(item) {
@@ -2560,7 +2538,6 @@ function fixedLineScore(line, item) {
   const keywordText = noteKeywordText(item);
   score += line.keywords.filter((keyword) => keywordText.includes(keyword)).length * 2;
   if (line.id === "trend" && item.funnel_role === "曝光") score += 2;
-  if (line.id === "scenario" && industryClusterForNote(item) !== "全行业") score += 3;
   if (line.id === "trust" && ["信任", "转化"].includes(item.funnel_role)) score += 5;
   return score;
 }
@@ -2586,22 +2563,7 @@ function dedupeNotes(rows) {
 }
 
 function groupFixedNotes(line, notes) {
-  if (!line.groupByIndustry) {
-    return [{ id: "all", label: "今日通用池", notes: notes.slice(0, 18) }];
-  }
-  const grouped = new Map();
-  notes.forEach((note) => {
-    const label = industryClusterForNote(note);
-    if (!grouped.has(label)) grouped.set(label, []);
-    grouped.get(label).push(note);
-  });
-  return Array.from(grouped.entries())
-    .map(([label, groupNotes]) => ({ id: label, label, notes: sortHotNotes(groupNotes).slice(0, 12) }))
-    .sort((a, b) => {
-      if (a.label === "全行业" && b.label !== "全行业") return -1;
-      if (b.label === "全行业" && a.label !== "全行业") return 1;
-      return Number(b.notes[0]?.interaction_score || 0) - Number(a.notes[0]?.interaction_score || 0);
-    });
+  return [{ id: "all", label: "全行业", notes: sortHotNotes(notes).slice(0, 18) }];
 }
 
 function buildFixedContentLines(rows) {
@@ -2649,8 +2611,8 @@ function FixedContentFlow({ data }) {
     return rows || [];
   }, [data]);
   const lines = useMemo(() => buildFixedContentLines(fixedRows), [fixedRows]);
+  const initialHistory = useMemo(() => readFixedContentHistory(), []);
   const [selectedLineId, setSelectedLineId] = useState("trend");
-  const [selectedGroupId, setSelectedGroupId] = useState("");
   const [selectedNoteId, setSelectedNoteId] = useState("");
   const [noteDetail, setNoteDetail] = useState(null);
   const [loadingNoteDetail, setLoadingNoteDetail] = useState(false);
@@ -2663,32 +2625,31 @@ function FixedContentFlow({ data }) {
   const [fixedResult, setFixedResult] = useState(null);
   const [resultOpen, setResultOpen] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
+  const [editingSlot, setEditingSlot] = useState(null);
+  const [editInstruction, setEditInstruction] = useState("");
+  const [editingImage, setEditingImage] = useState(false);
+  const [historyItems, setHistoryItems] = useState(initialHistory);
 
   const selectedLine = lines.find((line) => line.id === selectedLineId) || lines[0] || fixedContentLineConfigs[0];
-  const groups = selectedLine.groups || [];
-  const selectedGroup = groups.find((group) => group.id === selectedGroupId) || groups[0] || { id: "", label: "", notes: [] };
-  const visibleNotes = selectedGroup.notes || [];
+  const visibleNotes = selectedLine.notes || [];
   const selectedNote = visibleNotes.find((note) => note.note_id === selectedNoteId) || visibleNotes[0] || null;
   const sourceImages = sourceImagesForNote(noteDetail);
   const selectedForm = noteDetail ? imageWorkflowFormFromNote(noteDetail, emptyImageWorkflowForm) : null;
   const selectedImageCount = selectedForm ? normalizeWorkflowImageCount(selectedForm.imageCount) : 1;
+  const selectedNoteHistory = useMemo(
+    () =>
+      historyItems
+        .filter((item) => item?.form?.noteId && item.form.noteId === selectedNote?.note_id)
+        .sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || ""))),
+    [historyItems, selectedNote?.note_id],
+  );
 
   useEffect(() => {
     if (!lines.some((line) => line.id === selectedLineId)) {
       setSelectedLineId(lines[0]?.id || "trend");
-      setSelectedGroupId("");
       setSelectedNoteId("");
     }
   }, [lines, selectedLineId]);
-
-  useEffect(() => {
-    setSelectedGroupId("");
-    setSelectedNoteId("");
-  }, [selectedLineId]);
-
-  useEffect(() => {
-    setSelectedNoteId("");
-  }, [selectedGroupId]);
 
   useEffect(() => {
     if (!selectedNote?.note_id) {
@@ -2737,6 +2698,62 @@ function FixedContentFlow({ data }) {
 
   function updateProgress(activeStep, message, status = "running") {
     setProgress({ status, activeStep, message });
+  }
+
+  function persistFixedHistoryItem(finalResult, nextSocialDraft = finalResult?.socialDraft || null) {
+    if (!finalResult?.imageResult) return null;
+    const compactResult = compactImageResult(finalResult.imageResult);
+    if (!generatedImagesForSave(compactResult).length) return null;
+    const historyId = finalResult.historyId || imageResultGroupId(compactResult) || `fixed-content-${Date.now()}`;
+    const item = {
+      id: historyId,
+      createdAt: finalResult.producedAt || new Date().toISOString(),
+      form: historyFormSnapshot(finalResult.form || emptyImageWorkflowForm),
+      result: compactResult,
+      socialPlatform: "xhs",
+      socialDraft: compactSocialDraft(nextSocialDraft),
+      noteId: finalResult.form?.noteId || "",
+      noteTitle: finalResult.note?.title || finalResult.form?.title || "",
+      noteDate: finalResult.note?.note_date || "",
+      authorNickname: finalResult.note?.author_nickname || "",
+      lineId: finalResult.lineId || selectedLine.id,
+      lineTitle: finalResult.lineTitle || selectedLine.title,
+      lineShortTitle: finalResult.lineShortTitle || selectedLine.shortTitle,
+    };
+    const next = upsertFixedContentHistoryItem(item, historyItems);
+    setHistoryItems(next);
+    return item;
+  }
+
+  function restoreFixedHistoryItem(item) {
+    if (!item) return;
+    setSelectedLineId(item.lineId || selectedLineId);
+    setSelectedNoteId(item.noteId || item.form?.noteId || "");
+    setFixedSize(item.form?.size || "1024x1536");
+    setFixedResult({
+      note: item.note || null,
+      form: { ...emptyImageWorkflowForm, ...(item.form || {}) },
+      imageResult: item.result || null,
+      socialDraft: item.socialDraft || null,
+      sourceImages: [],
+      producedAt: item.createdAt || new Date().toISOString(),
+      historyId: item.id,
+      lineId: item.lineId || selectedLine.id,
+      lineTitle: item.lineTitle || selectedLine.title,
+      lineShortTitle: item.lineShortTitle || selectedLine.shortTitle,
+    });
+    setResultOpen(true);
+    setEditingSlot(null);
+    setEditInstruction("");
+    setProgress({ status: "done", activeStep: 4, message: "已恢复历史草稿" });
+  }
+
+  function removeFixedHistoryItem(id) {
+    setHistoryItems((current) => {
+      const next = current.filter((item) => item.id !== id);
+      writeFixedContentHistory(next);
+      return next;
+    });
   }
 
   async function runFixedRewrite() {
@@ -2840,6 +2857,7 @@ function FixedContentFlow({ data }) {
         }),
       });
 
+      const historyId = `fixed-content-${form.noteId}-${Date.now()}`;
       const finalResult = {
         note: selectedNote,
         form,
@@ -2847,27 +2865,123 @@ function FixedContentFlow({ data }) {
         socialDraft,
         sourceImages: sourceImagesForNote(detail),
         producedAt: new Date().toISOString(),
+        historyId,
+        lineId: selectedLine.id,
+        lineTitle: selectedLine.title,
+        lineShortTitle: selectedLine.shortTitle,
       };
       setFixedResult(finalResult);
       setProgress({ status: "done", activeStep: 4, message: "洗稿完成，可以查看小红书文案和生成图片" });
-      const compactResult = compactImageResult(imageResult);
-      if (generatedImagesForSave(compactResult).length) {
-        upsertImageWorkflowHistoryItem(
-          {
-            id: imageResultGroupId(compactResult) || `fixed-content-${Date.now()}`,
-            createdAt: finalResult.producedAt,
-            form: historyFormSnapshot(form),
-            result: compactResult,
-            socialPlatform: "xhs",
-            socialDraft: compactSocialDraft(socialDraft),
-          },
-          [],
-        );
-      }
+      persistFixedHistoryItem(finalResult, socialDraft);
     } catch (error) {
       setProgress({ status: "failed", activeStep: Math.min(progress.activeStep || 0, fixedRewriteSteps.length - 1), message: error.message || "洗稿失败" });
     } finally {
       setRunning(false);
+    }
+  }
+
+  function openFixedImageEdit(slot) {
+    setEditingSlot(slot);
+    setEditInstruction("");
+    setProgress((current) => ({ ...current, message: `准备修改第${slot}张图` }));
+  }
+
+  async function editFixedGeneratedImage(event) {
+    event.preventDefault();
+    const slot = normalizeWorkflowImageCount(editingSlot);
+    const instruction = editInstruction.trim();
+    const currentImageResult = fixedResult?.imageResult;
+    const sourceSlot = imageSlotItems(currentImageResult).find((item) => item.slot === slot);
+    const sourceImage = sourceSlot?.image;
+    if (!sourceImage?.url) {
+      setProgress((current) => ({ ...current, status: "failed", message: "请先生成当前图片后再改图" }));
+      return;
+    }
+    if (!instruction) {
+      setProgress((current) => ({ ...current, status: "failed", message: "请填写这次要修改的点" }));
+      return;
+    }
+
+    const startedAt = Date.now();
+    const originalPrompt = imagePromptAt(fixedResult.form || emptyImageWorkflowForm, slot) || fixedResult.form?.imagePrompt || "";
+    const editPrompt = buildImageEditPrompt({ slot, originalPrompt, instruction });
+    setEditingImage(true);
+    setProgress((current) => ({ ...current, status: "running", activeStep: 1, message: `第${slot}张改图任务创建中` }));
+    try {
+      const payload = await requestJson("/api/image-generate", {
+        method: "POST",
+        body: JSON.stringify({
+          noteId: fixedResult.form.noteId.trim(),
+          title: fixedResult.form.title,
+          content: fixedResult.form.content,
+          targetPersona: fixedResult.form.targetPersona,
+          userPain: fixedResult.form.userPain,
+          businessLogic: fixedResult.form.businessLogic,
+          businessKnowledge: fixedResult.form.businessKnowledge,
+          imagePrompt: fixedResult.form.imagePrompt,
+          imagePrompts: [{ slot: 1, prompt: editPrompt }],
+          unifiedVisualStyle: fixedResult.form.unifiedVisualStyle !== false,
+          referenceImage: sourceImage.url,
+          workflowAction: "image_edit",
+          editSlot: slot,
+          size: fixedResult.form.size,
+          imageCount: 1,
+        }),
+      });
+      let editImages = (payload.images || []).map((image) => ({ ...image, slot }));
+      let taskState = (payload.tasks?.length ? payload.tasks : [{ slot, taskId: payload.taskId, images: editImages }]).map((task) => ({
+        slot,
+        taskId: task.taskId,
+        status: task.images?.length ? "succeeded" : "processing",
+        images: (task.images || []).map((image) => ({ ...image, slot })),
+      }));
+
+      if (!editImages.length) {
+        if (!taskState.some((task) => task.taskId)) throw new Error("改图任务创建成功，但没有返回任务 ID");
+        setProgress((current) => ({ ...current, activeStep: 2, message: `第${slot}张改图生成中` }));
+        for (let attempt = 0; attempt < maxImageTaskPollAttempts; attempt += 1) {
+          await wait(imageTaskPollDelay(attempt));
+          const task = taskState[0];
+          if (!task?.taskId) continue;
+          const taskPayload = await requestJson(`/api/image-task?taskId=${encodeURIComponent(task.taskId)}`);
+          taskState = [
+            {
+              ...task,
+              status: taskPayload.status,
+              images: (taskPayload.images || []).map((image) => ({ ...image, slot })),
+            },
+          ];
+          editImages = taskState[0].images || [];
+          if (taskPayload.status === "failed") throw new Error(taskPayload.error || `第${slot}张改图失败`);
+          if (editImages.length) break;
+          setProgress((current) => ({ ...current, activeStep: 2, message: `第${slot}张${imageTaskStatusLabel(taskPayload.status)}` }));
+        }
+      }
+
+      const editImage = editImages[0];
+      if (!editImage?.url) throw new Error("改图任务仍在处理中，请稍后重试");
+      const editResult = {
+        ...payload,
+        tasks: taskState,
+        images: editImages,
+        status: "succeeded",
+        latencyMs: Date.now() - startedAt,
+      };
+      const nextResult = appendEditedSlotImage(currentImageResult, slot, editResult, editImage, instruction, Date.now() - startedAt);
+      const nextFixedResult = {
+        ...fixedResult,
+        imageResult: nextResult,
+        historyId: fixedResult.historyId || `fixed-content-${fixedResult.form.noteId}`,
+      };
+      setFixedResult(nextFixedResult);
+      persistFixedHistoryItem(nextFixedResult, fixedResult.socialDraft);
+      setEditingSlot(null);
+      setEditInstruction("");
+      setProgress({ status: "done", activeStep: 4, message: `第${slot}张已改图` });
+    } catch (error) {
+      setProgress({ status: "failed", activeStep: Math.min(progress.activeStep || 0, fixedRewriteSteps.length - 1), message: error.message || "改图失败" });
+    } finally {
+      setEditingImage(false);
     }
   }
 
@@ -2958,12 +3072,50 @@ function FixedContentFlow({ data }) {
               <SectionHeader icon={ImagePlus} title="生成图片" action={<StatusPill tone="neutral">{formatNumber(images.length)} 张</StatusPill>} />
               <div className="fixed-result-images">
                 {images.map((slot) => (
-                  <button key={`${slot.slot}-${slot.image.url}`} type="button" onClick={() => setPreviewImage(slot.image)}>
-                    <img src={slot.image.url} alt={`固定内容流生成图 ${slot.slot}`} />
-                    <span>第{slot.slot}张</span>
-                  </button>
+                  <div className="fixed-result-image-card" key={`${slot.slot}-${slot.image.url}`}>
+                    <button type="button" onClick={() => setPreviewImage(slot.image)}>
+                      <img src={slot.image.url} alt={`固定内容流生成图 ${slot.slot}`} />
+                      <span>第{slot.slot}张</span>
+                    </button>
+                    <div className="image-slot-actions">
+                      <button className="copy-button" type="button" onClick={() => openFixedImageEdit(slot.slot)} disabled={editingImage || running}>
+                        <PencilLine size={14} />
+                        改图
+                      </button>
+                      <span>{slot.versionCount > 1 ? `版本 ${slot.versionCount}` : "原图版本"}</span>
+                    </div>
+                  </div>
                 ))}
               </div>
+              {editingSlot ? (
+                <form className="image-edit-panel" onSubmit={editFixedGeneratedImage}>
+                  <div className="image-edit-head">
+                    <strong>修改第{editingSlot}张</strong>
+                    <button
+                      className="copy-button"
+                      type="button"
+                      onClick={() => {
+                        setEditingSlot(null);
+                        setEditInstruction("");
+                      }}
+                      disabled={editingImage}
+                    >
+                      取消
+                    </button>
+                  </div>
+                  <textarea
+                    value={editInstruction}
+                    onChange={(event) => setEditInstruction(event.target.value)}
+                    placeholder="只写这次要改的点，例如：把标题换成更短的反常识表达，保留当前配色和版式"
+                    rows={4}
+                  />
+                  <div className="image-edit-actions">
+                    <button className="primary-button" type="submit" disabled={editingImage}>
+                      {editingImage ? "改图中" : "确认改图"}
+                    </button>
+                  </div>
+                </form>
+              ) : null}
             </section>
           </div>
         </section>
@@ -2983,46 +3135,30 @@ function FixedContentFlow({ data }) {
 
   return (
     <section className="fixed-content-flow">
-      <section className="fixed-content-layout">
-        <section className="panel fixed-line-panel">
-          <SectionHeader icon={Layers3} title="固定内容线" action={<StatusPill tone="neutral">近30天</StatusPill>} />
-          <div className="fixed-line-stack">
-            {lines.map((line) => (
-              <button
-                key={line.id}
-                className={`fixed-line-card ${selectedLine.id === line.id ? "active" : ""}`}
-                type="button"
-                onClick={() => setSelectedLineId(line.id)}
-              >
-                <div>
-                  <span>{line.shortTitle}</span>
-                  <strong>{line.title}</strong>
-                  <p>{line.intent}</p>
-                </div>
-                <em>{formatNumber(line.notes.length)} 条</em>
-              </button>
-            ))}
-          </div>
-        </section>
+      <section className="fixed-line-strip">
+        {lines.map((line) => (
+          <button
+            key={line.id}
+            className={`fixed-line-card ${selectedLine.id === line.id ? "active" : ""}`}
+            type="button"
+            onClick={() => setSelectedLineId(line.id)}
+          >
+            <div>
+              <span>{line.shortTitle}</span>
+              <strong>{line.title}</strong>
+              <p>{line.intent}</p>
+            </div>
+            <em>{formatNumber(line.notes.length)} 条</em>
+          </button>
+        ))}
+      </section>
 
+      <section className="fixed-workspace">
         <section className="panel fixed-note-panel">
-          <SectionHeader
-            icon={Filter}
-            title={selectedLine.shortTitle}
-            action={<StatusPill tone="blue">{selectedLine.targetPersonas.join(" / ")}</StatusPill>}
-          />
-          <div className="fixed-cluster-tabs">
-            {groups.map((group) => (
-              <button
-                key={group.id}
-                className={selectedGroup.id === group.id ? "active" : ""}
-                type="button"
-                onClick={() => setSelectedGroupId(group.id)}
-              >
-                <span>{group.label}</span>
-                <em>{formatNumber(group.notes.length)}</em>
-              </button>
-            ))}
+          <SectionHeader icon={Filter} title={selectedLine.shortTitle} action={<StatusPill tone="blue">全行业</StatusPill>} />
+          <div className="fixed-line-summary">
+            <strong>{selectedLine.title}</strong>
+            <span>{selectedLine.intent}</span>
           </div>
           <div className="fixed-note-list">
             {visibleNotes.length ? (
@@ -3047,7 +3183,7 @@ function FixedContentFlow({ data }) {
                   <p>{textPreview(noteContentText(note), 128) || "-"}</p>
                   <div className="fixed-note-tags">
                     <span>{note.primary_target_persona || "未标注人群"}</span>
-                    <span>{selectedLine.groupByIndustry ? industryClusterForNote(note) : note.core_topic_category || "通用内容"}</span>
+                    <span>全行业</span>
                   </div>
                   <div className="daily-note-metrics">
                     <NoteMetricChip label="互动" value={note.interaction_score} />
@@ -3070,7 +3206,7 @@ function FixedContentFlow({ data }) {
         <section className="panel fixed-detail-panel">
           <SectionHeader
             icon={Target}
-            title="笔记资产与执行"
+            title="资产执行"
             action={<StatusPill tone={running ? "amber" : fixedResult ? "green" : "neutral"}>{running ? "处理中" : fixedResult ? "已产出" : "待洗稿"}</StatusPill>}
           />
           {selectedNote ? (
@@ -3078,7 +3214,9 @@ function FixedContentFlow({ data }) {
               <div className="fixed-selected-head">
                 <div>
                   <strong>{selectedNote.title || selectedNote.note_id}</strong>
-                  <span>{selectedNote.note_id} · {selectedNote.author_nickname || "-"}</span>
+                  <span>
+                    {selectedNote.note_id} · {selectedNote.author_nickname || "-"}
+                  </span>
                 </div>
                 <button className="primary-button" type="button" onClick={runFixedRewrite} disabled={running || loadingNoteDetail}>
                   <Sparkles size={15} />
@@ -3152,13 +3290,48 @@ function FixedContentFlow({ data }) {
                   </button>
                 ) : null}
               </div>
+
+              <div className="fixed-history-panel">
+                <SectionHeader icon={Clock3} title="历史草稿" action={<StatusPill tone="neutral">{selectedNoteHistory.length}条</StatusPill>} />
+                {selectedNoteHistory.length ? (
+                  <div className="fixed-history-list">
+                    {selectedNoteHistory.map((item) => (
+                      <article className="fixed-history-item" key={item.id}>
+                        <div className="fixed-history-head">
+                          <div>
+                            <strong>{item.form?.title || item.noteTitle || item.form?.noteId || "未命名草稿"}</strong>
+                            <span>
+                              {formatDateTimeSecond(item.createdAt || item.updatedAt)} · {item.form?.size || "1024x1536"} · {socialPlatformLabels[item.socialPlatform] || item.socialDraft?.platformLabel || "社媒"}
+                            </span>
+                          </div>
+                          <div className="image-history-actions">
+                            <button className="copy-button" type="button" onClick={() => restoreFixedHistoryItem(item)}>
+                              恢复
+                            </button>
+                            <button className="copy-button" type="button" onClick={() => removeFixedHistoryItem(item.id)}>
+                              删除
+                            </button>
+                          </div>
+                        </div>
+                        <p className="fixed-history-preview">{textPreview(item.socialDraft?.content || "", 180) || "暂无社媒草稿"}</p>
+                        <div className="fixed-history-meta">
+                          <span>{item.lineShortTitle || item.lineTitle || "固定内容线"}</span>
+                          <span>{formatNumber(generatedImagesForSave(item.result).length)} 张</span>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="fixed-history-empty">当前笔记还没有历史草稿</div>
+                )}
+              </div>
               {detailMessage ? <div className="admin-message">{detailMessage}</div> : null}
             </>
           ) : (
             <div className="fixed-content-empty">
               <Layers3 size={28} />
               <strong>先选择候选笔记</strong>
-              <span>左侧按内容线和行业聚类展示近30天互动权重最高的内容</span>
+              <span>左侧按内容线展示近30天互动权重最高的内容</span>
             </div>
           )}
         </section>
