@@ -88,6 +88,13 @@ async function query(client, text, params = []) {
   return rows;
 }
 
+function optionalQuery(client, text, params = [], fallback = []) {
+  return query(client, text, params).catch((error) => {
+    console.error("dashboard_optional_query_failed", error.message);
+    return fallback;
+  });
+}
+
 function queryValue(req, key) {
   if (req.query && req.query[key] !== undefined) return Array.isArray(req.query[key]) ? req.query[key][0] : req.query[key];
   try {
@@ -834,7 +841,7 @@ module.exports = async function handler(req, res) {
         `,
         contentParams,
       ),
-      query(
+      optionalQuery(
         client,
         `
         WITH bounds AS (
@@ -944,6 +951,8 @@ module.exports = async function handler(req, res) {
         ORDER BY a.interaction_score DESC NULLS LAST, a.fresh_hot_score DESC NULLS LAST, ${contentDateColumn} DESC NULLS LAST
         LIMIT 240
         `,
+        [],
+        [],
       ),
       query(
         client,
