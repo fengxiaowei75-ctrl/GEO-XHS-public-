@@ -29,7 +29,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { ReactWordcloud } from "@cp949/react-wordcloud";
-import { useEffect, useMemo, useState } from "react";
+import { Component, useEffect, useMemo, useState } from "react";
 import "tippy.js/dist/tippy.css";
 import { ChatWidget } from "./components/ChatWidget";
 import { sampleDashboard } from "./sampleData.js";
@@ -386,6 +386,53 @@ function SectionHeader({ icon: Icon, title, action }) {
 
 function StatusPill({ children, tone = "neutral" }) {
   return <span className={`pill pill-${tone}`}>{children}</span>;
+}
+
+class ViewErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidUpdate(prevProps) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.error) {
+      // eslint-disable-next-line react/no-did-update-set-state
+      this.setState({ error: null });
+    }
+  }
+
+  render() {
+    if (this.state.error) {
+      const message = this.state.error instanceof Error ? this.state.error.message : String(this.state.error || "页面渲染失败");
+      return (
+        <section className="panel draft-review-empty-shell draft-review-error-panel">
+          <SectionHeader icon={AlertTriangle} title="页面加载失败" action={<StatusPill tone="neutral">错误</StatusPill>} />
+          <div className="draft-review-empty-copy">
+            <AlertTriangle size={28} />
+            <strong>当前功能页渲染失败</strong>
+            <span>{message}</span>
+          </div>
+          <div className="draft-review-empty-actions">
+            <button className="copy-button" type="button" onClick={() => this.props.onNavigate?.("fixedContent")}>
+              去固定内容流
+            </button>
+            <button className="copy-button" type="button" onClick={() => this.props.onNavigate?.("imageGen")}>
+              去爆文洗稿流
+            </button>
+            <button className="copy-button" type="button" onClick={() => window.location.reload()}>
+              重新加载
+            </button>
+          </div>
+        </section>
+      );
+    }
+
+    return this.props.children;
+  }
 }
 
 function SelectControl({ value, onChange, options, label }) {
@@ -3651,12 +3698,13 @@ function DraftReviewFlow({ data, onNavigate }) {
   const selectedNoteId = draftItemNoteId(selectedDraft);
   const selectedTitle = selectedDraft ? draftItemTitle(selectedDraft) : "暂无待审核草稿";
   const selectedSocialContent = draftItemSocialContent(selectedDraft);
+  const selectedDraftForm = selectedDraft?.form || {};
+  const selectedDraftSocialDraft = selectedDraft?.socialDraft || null;
   const generatedImages = draftItemImages(selectedDraft);
+  const generatedImageItems = imageVersionDisplayItems(selectedDraft?.result, selectedDraftForm.imageCount || selectedDraft?.result?.imageCount || 1, false);
   const sourceImages = noteDetail?.source_images?.length ? sourceImagesForNote(noteDetail) : draftItemSourceImages(selectedDraft);
   const originalContent = sanitizeXhsDraftContent(noteDetail?.content || selectedDraft?.form?.content || "");
   const selectedMetrics = noteDetail || selectedDraft || {};
-  const selectedDraftForm = selectedDraft?.form || {};
-  const selectedDraftSocialDraft = selectedDraft?.socialDraft || null;
   const progressMessage = !drafts.length && progress.status === "idle" ? emptyDraftHint : progress.message;
 
   function navigateTo(view) {
@@ -4117,10 +4165,10 @@ function DraftReviewFlow({ data, onNavigate }) {
         </section>
 
         <section className="panel draft-review-image-panel">
-          <SectionHeader icon={ImagePlus} title="洗稿图片" action={<StatusPill tone="neutral">{formatNumber(generatedImages.length)} 张</StatusPill>} />
-          {generatedImages.length ? (
+          <SectionHeader icon={ImagePlus} title="洗稿图片" action={<StatusPill tone="neutral">{formatNumber(generatedImageItems.length)} 张</StatusPill>} />
+          {generatedImageItems.length ? (
             <div className="draft-review-image-grid">
-              {generatedImages.map((item) => (
+              {generatedImageItems.map((item) => (
                 <div className="draft-review-image-card" key={item.key}>
                   <button type="button" className="draft-review-thumb-button" onClick={() => setPreviewImage(item.image)} disabled={!item.image?.url}>
                     <img src={item.image.url} alt={`洗稿图片 ${item.slot} ${item.image.version || 1}`} />
@@ -6347,26 +6395,28 @@ export default function App() {
             </div>
           ) : null}
 
-          {activeView === "content" ? (
-            <ContentDashboard
-              data={data}
-              loading={loading}
-              filter={filter}
-              contentStart={contentStart}
-              contentEnd={contentEnd}
-              onContentRangeApply={handleContentRangeApply}
-            />
-          ) : null}
-          {canAccess(currentUser, "content") ? (
-            <div hidden={activeView !== "imageGen"}>
-              <ImageGenerationWorkflow data={data} />
-            </div>
-          ) : null}
-          {activeView === "fixedContent" ? <FixedContentFlow data={data} /> : null}
-          {activeView === "draftReview" ? <DraftReviewFlow data={data} onNavigate={setActiveView} /> : null}
-          {activeView === "ops" ? <OpsDashboard data={data} apiDate={apiDate} onApiDateChange={handleApiDateChange} /> : null}
-          {activeView === "models" ? <ModelConfigView data={data} /> : null}
-          {activeView === "admin" ? <AdminConfigView currentUser={currentUser} permissionCatalog={permissionCatalog} /> : null}
+          <ViewErrorBoundary resetKey={activeView} onNavigate={setActiveView}>
+            {activeView === "content" ? (
+              <ContentDashboard
+                data={data}
+                loading={loading}
+                filter={filter}
+                contentStart={contentStart}
+                contentEnd={contentEnd}
+                onContentRangeApply={handleContentRangeApply}
+              />
+            ) : null}
+            {canAccess(currentUser, "content") ? (
+              <div hidden={activeView !== "imageGen"}>
+                <ImageGenerationWorkflow data={data} />
+              </div>
+            ) : null}
+            {activeView === "fixedContent" ? <FixedContentFlow data={data} /> : null}
+            {activeView === "draftReview" ? <DraftReviewFlow data={data} onNavigate={setActiveView} /> : null}
+            {activeView === "ops" ? <OpsDashboard data={data} apiDate={apiDate} onApiDateChange={handleApiDateChange} /> : null}
+            {activeView === "models" ? <ModelConfigView data={data} /> : null}
+            {activeView === "admin" ? <AdminConfigView currentUser={currentUser} permissionCatalog={permissionCatalog} /> : null}
+          </ViewErrorBoundary>
         </main>
       </div>
       <ChatWidget />
