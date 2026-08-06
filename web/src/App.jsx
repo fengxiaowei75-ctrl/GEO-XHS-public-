@@ -24,7 +24,6 @@ import {
   Shield,
   Sparkles,
   Target,
-  Upload,
   UserPlus,
   Users,
   XCircle,
@@ -54,6 +53,7 @@ const navItems = [
   { id: "content", label: "市场需求洞察", icon: Database, permission: "content" },
   { id: "imageGen", label: "爆文洗稿流", icon: ImagePlus, permission: "content" },
   { id: "fixedContent", label: "固定内容流", icon: Layers3, permission: "content" },
+  { id: "draftReview", label: "待审核草稿", icon: ListChecks, permission: "content" },
   { id: "ops", label: "运行监控", icon: Gauge, permission: "ops" },
   { id: "models", label: "模型配置", icon: KeyRound, permission: "models" },
   { id: "admin", label: "管理员配置", icon: Shield, permission: "admin" },
@@ -1318,6 +1318,8 @@ const fixedContentHistoryKey = "geo:fixed-content-workflow-history:v1";
 const maxFixedContentHistory = 24;
 const maxWorkflowImages = 10;
 const maxImageTaskPollAttempts = 24;
+const imageWorkflowHistoryUpdatedEvent = "geo:image-workflow-history-updated:v1";
+const fixedContentHistoryUpdatedEvent = "geo:fixed-content-history-updated:v1";
 
 function normalizeWorkflowImageCount(value) {
   const count = Number(value);
@@ -1462,7 +1464,13 @@ function markdownSection(title, value) {
 
 function imageOutputMarkdown(item) {
   const form = item?.form || {};
+  const sourceImages = Array.isArray(item?.sourceImages) ? item.sourceImages.filter((image) => image?.url).slice(0, maxWorkflowImages) : [];
   const images = generatedImagesForSave(item?.result);
+  const sourceImageRows = sourceImages.length
+    ? sourceImages
+        .map((image) => `- ${image.label || `原笔记图 ${image.slot || ""}`}: ${image.url}${image.source ? `\n  - 来源：${image.source}` : ""}`)
+        .join("\n")
+    : "暂无";
   const imageRows = images.length
     ? images.map((image) => `- ${image.label || `第${image.slot}张 v${image.version || 1}`}: ${image.url}${image.editInstruction ? `\n  - 改图要求：${image.editInstruction}` : ""}`).join("\n")
     : "暂无";
@@ -1480,6 +1488,10 @@ function imageOutputMarkdown(item) {
     markdownSection("业务逻辑", form.businessLogic),
     markdownSection("业务知识点", form.businessKnowledge),
     markdownSection("整组风格/全局补充", form.imagePrompt),
+    "## 原笔记图片",
+    "",
+    sourceImageRows,
+    "",
     "## 逐图提示词",
     "",
     normalizeWorkflowImagePrompts(form.imagePrompts)
@@ -1506,7 +1518,7 @@ function socialOutputMarkdown(item) {
     `笔记 ID：${form.noteId || "-"}`,
     `产出时间：${item?.updatedAt || item?.createdAt || "-"}`,
     "",
-    draft.content || "暂无",
+    sanitizeXhsDraftContent(draft.content) || "暂无",
     "",
   ].join("\n");
 }
@@ -1601,12 +1613,15 @@ function generatedImagesForSave(result) {
   }));
 }
 
-function buildImageEditPrompt({ slot, originalPrompt, instruction }) {
+function buildImageEditPrompt({ slot, originalPrompt, instruction, branchIndex = 1, branchTotal = 1 }) {
   return [
     "【改图任务】",
     `这是对当前组图第${slot}张已有产出进行改图，不是重新生成整组。随请求传入的垫图/参考图就是当前渲染框里的图片结果。`,
     "请以当前图片结果为基础，只执行用户本次修改点；没有提到的主体、构图、信息层级、风格、配色、字体气质和已经正确的文字尽量保留。",
     "不要复制其他图片的内容模块，不要把第1张/封面逻辑套到这张图上。",
+    branchTotal > 1
+      ? `本次需要从当前图片派生${branchTotal}张图。当前是派生结果第${branchIndex}张：必须和其他派生图主题连续，但版式、信息层级或画面侧重点要有明显差异。`
+      : "",
     "",
     "【当前图原始提示词】",
     originalPrompt || "暂无逐图原始提示词，请参考全局内容资产和当前图片结果。",
@@ -1616,38 +1631,57 @@ function buildImageEditPrompt({ slot, originalPrompt, instruction }) {
   ].join("\n");
 }
 
-function appendEditedSlotImage(currentResult, slot, editResult, editImage, editInstruction, latencyMs) {
+function firstEmptyImageSlot(result, reserved = new Set()) {
+  const occupied = new Set(imageSlotItems(result).filter((slot) => slot.versions.length).map((slot) => slot.slot));
+  for (let slot = 1; slot <= maxWorkflowImages; slot += 1) {
+    if (!occupied.has(slot) && !reserved.has(slot)) return slot;
+  }
+  return null;
+}
+
+function appendEditedImages(currentResult, slot, editResult, editImages, editInstruction, latencyMs) {
   const targetSlot = normalizeWorkflowImageCount(slot);
   const groupId = imageResultGroupId(currentResult) || imageResultGroupId(editResult) || `image-group-${Date.now()}`;
-  const existingVersions = imageVersionsForSlot(currentResult, targetSlot);
-  const nextVersion = existingVersions.length + 1;
-  const taskId = editResult?.taskIds?.[0] || editResult?.taskId || editImage?.taskId || "";
-  const nextImage = {
-    ...editImage,
-    id: editImage?.id || `slot-${targetSlot}-v${nextVersion}`,
-    slot: targetSlot,
-    version: nextVersion,
-    taskId,
-    editedAt: new Date().toISOString(),
-    editInstruction,
-  };
-  const currentTasks = Array.isArray(currentResult?.tasks) ? currentResult.tasks : [];
-  const taskFound = currentTasks.some((task) => Number(task.slot) === targetSlot);
-  const tasks = currentTasks.map((task) => {
-    if (Number(task.slot) !== targetSlot) return task;
-    return {
-      ...task,
-      taskId: task.taskId || taskId,
-      status: "succeeded",
-      images: dedupeImageVersions([...(task.images || []), nextImage]),
+  const editImageItems = (editImages || []).filter((image) => image?.url).slice(0, 2);
+  const reservedSlots = new Set();
+  let tasks = Array.isArray(currentResult?.tasks) ? currentResult.tasks.map((task) => ({ ...task, images: [...(task.images || [])] })) : [];
+  let images = [...(currentResult?.images || [])];
+
+  editImageItems.forEach((editImage, index) => {
+    const nextSlot = index === 0 ? targetSlot : firstEmptyImageSlot({ ...(currentResult || {}), tasks, images }, reservedSlots);
+    if (!nextSlot) return;
+    reservedSlots.add(nextSlot);
+    const existingVersions = imageVersionsForSlot({ ...(currentResult || {}), tasks, images }, nextSlot);
+    const nextVersion = existingVersions.length + 1;
+    const taskId = editResult?.tasks?.[index]?.taskId || editResult?.taskIds?.[index] || editResult?.taskId || editImage?.taskId || "";
+    const nextImage = {
+      ...editImage,
+      id: editImage?.id || `slot-${nextSlot}-v${nextVersion}`,
+      slot: nextSlot,
+      version: nextVersion,
+      taskId,
+      editedAt: new Date().toISOString(),
+      editInstruction: index === 0 ? editInstruction : `由第${targetSlot}张拆分新增：${editInstruction}`,
     };
+    const taskFound = tasks.some((task) => Number(task.slot) === nextSlot);
+    tasks = tasks.map((task) => {
+      if (Number(task.slot) !== nextSlot) return task;
+      return {
+        ...task,
+        taskId: task.taskId || taskId,
+        status: "succeeded",
+        images: dedupeImageVersions([...(task.images || []), nextImage]),
+      };
+    });
+    if (!taskFound) {
+      tasks.push({ slot: nextSlot, taskId, status: "succeeded", images: [nextImage] });
+    }
+    images = dedupeImageVersions([...images, nextImage]);
   });
-  if (!taskFound) {
-    tasks.push({ slot: targetSlot, taskId, status: "succeeded", images: [nextImage] });
-  }
-  const images = dedupeImageVersions([...(currentResult?.images || []), nextImage]);
+
   const taskIds = Array.from(new Set([...(currentResult?.taskIds || []), ...(editResult?.taskIds || [])].filter(Boolean)));
   const prompts = [currentResult?.prompt, `--- 第${targetSlot}张改图发送提示词 ---\n${editResult?.prompt || ""}`].filter(Boolean).join("\n\n");
+  const imageCount = Math.max(Number(currentResult?.imageCount || 0) || 1, ...images.map((image) => Number(image.slot || 0)).filter(Boolean));
   return {
     ...(currentResult || {}),
     ok: true,
@@ -1656,6 +1690,7 @@ function appendEditedSlotImage(currentResult, slot, editResult, editImage, editI
     taskIds,
     tasks,
     images,
+    imageCount,
     status: "succeeded",
     model: currentResult?.model || editResult?.model || "",
     size: currentResult?.size || editResult?.size || "",
@@ -1663,6 +1698,10 @@ function appendEditedSlotImage(currentResult, slot, editResult, editImage, editI
     latencyMs,
     logWarning: [currentResult?.logWarning, editResult?.logWarning].filter(Boolean).join("；"),
   };
+}
+
+function appendEditedSlotImage(currentResult, slot, editResult, editImage, editInstruction, latencyMs) {
+  return appendEditedImages(currentResult, slot, editResult, [editImage], editInstruction, latencyMs);
 }
 
 function downloadBlob(blob, fallbackFilename) {
@@ -1704,6 +1743,7 @@ function writeImageWorkflowHistory(items) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(imageWorkflowHistoryKey, JSON.stringify(items.slice(0, maxImageWorkflowHistory)));
+    window.dispatchEvent(new CustomEvent(imageWorkflowHistoryUpdatedEvent));
   } catch {
     // Browser storage can fail when image URLs or drafts are too large; the UI still keeps current state.
   }
@@ -1733,6 +1773,7 @@ function writeFixedContentHistory(items) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(fixedContentHistoryKey, JSON.stringify(items.slice(0, maxFixedContentHistory)));
+    window.dispatchEvent(new CustomEvent(fixedContentHistoryUpdatedEvent));
   } catch {
     // Browser storage can fail when image URLs or drafts are too large; the UI still keeps current state.
   }
@@ -1746,6 +1787,97 @@ function upsertFixedContentHistoryItem(item, currentItems = []) {
   const next = [mergedItem, ...source.filter((historyItem) => historyItem.id !== item.id)].slice(0, maxFixedContentHistory);
   writeFixedContentHistory(next);
   return next;
+}
+
+function reviewDraftSourceLabel(source) {
+  return source === "fixed" ? "固定内容流" : "爆文洗稿流";
+}
+
+function normalizeReviewDraft(item, source) {
+  const socialDraft = item?.socialDraft
+    ? {
+        ...item.socialDraft,
+        content: sanitizeXhsDraftContent(item.socialDraft.content),
+      }
+    : null;
+  return {
+    ...item,
+    reviewId: `${source}:${item.id}`,
+    source,
+    sourceLabel: reviewDraftSourceLabel(source),
+    status: item.status || "待审核",
+    socialDraft,
+  };
+}
+
+function readReviewDrafts() {
+  return [
+    ...readFixedContentHistory().map((item) => normalizeReviewDraft(item, "fixed")),
+    ...readImageWorkflowHistory().map((item) => normalizeReviewDraft(item, "image")),
+  ].sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
+}
+
+function writeReviewDraftItem(draft) {
+  const item = {
+    ...draft,
+    updatedAt: new Date().toISOString(),
+    status: draft.status || "待审核",
+  };
+  delete item.reviewId;
+  delete item.source;
+  delete item.sourceLabel;
+  if (draft.source === "fixed") {
+    const next = upsertFixedContentHistoryItem(item);
+    return normalizeReviewDraft(next.find((historyItem) => historyItem.id === item.id) || item, "fixed");
+  }
+  const next = upsertImageWorkflowHistoryItem(item);
+  return normalizeReviewDraft(next.find((historyItem) => historyItem.id === item.id) || item, "image");
+}
+
+function draftPackagePayloadFromItem(item, options = {}) {
+  const form = item?.form || {};
+  const noteDetail = options.noteDetail || item?.noteDetail || null;
+  const socialContent = options.socialContent ?? (item?.socialDraft?.content || "");
+  const sourceImages = options.sourceImages || item?.sourceImages || [];
+  return {
+    platform: item?.socialPlatform || item?.socialDraft?.platform || "xhs",
+    producedAt: item?.updatedAt || item?.createdAt || new Date().toISOString(),
+    noteId: form.noteId || item?.noteId || "",
+    title: form.title || item?.noteTitle || noteDetail?.title || "",
+    content: form.content || noteDetail?.content || "",
+    targetPersona: form.targetPersona || noteDetail?.primary_target_persona || "",
+    userPain: form.userPain || noteDetail?.true_pain_label || "",
+    businessLogic: form.businessLogic || noteDetail?.business_logic || "",
+    businessKnowledge: form.businessKnowledge || noteDetail?.business_knowledge || "",
+    imagePrompt: promptPayloadForSave(form),
+    socialContent: sanitizeXhsDraftContent(socialContent),
+    images: generatedImagesForSave(item?.result),
+    sourceImages: Array.isArray(sourceImages) ? sourceImages.filter((image) => image?.url).slice(0, maxWorkflowImages) : [],
+  };
+}
+
+function draftItemNoteId(item) {
+  return item?.form?.noteId || item?.noteId || "";
+}
+
+function draftItemTitle(item) {
+  return item?.form?.title || item?.noteTitle || item?.note?.title || item?.title || draftItemNoteId(item) || "未命名草稿";
+}
+
+function draftItemSourceLabel(item) {
+  return item?.sourceLabel || "待审核";
+}
+
+function draftItemSocialContent(item) {
+  return sanitizeXhsDraftContent(item?.socialDraft?.content || "");
+}
+
+function draftItemImages(item) {
+  return generatedImagesForSave(item?.result);
+}
+
+function draftItemSourceImages(item) {
+  return Array.isArray(item?.sourceImages) ? item.sourceImages.filter((image) => image?.url).slice(0, maxWorkflowImages) : [];
 }
 
 function historyFormSnapshot(form) {
@@ -1810,12 +1942,34 @@ function compactImageResult(result) {
   };
 }
 
+function sanitizeXhsDraftContent(value) {
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => {
+      let text = String(line || "").trim();
+      if (/^(话题标签|标签|hashtags?)[:：]/i.test(text)) return "";
+      text = text.replace(/^(标题|正文|封面文案建议|评论区引导|小红书文案|新标题)[:：]\s*/g, "");
+      text = text.replace(/^#{1,6}\s*/g, "");
+      text = text.replace(/^[-*•]\s+/g, "");
+      text = text.replace(/^\d+[.)]\s+/g, "");
+      text = text.replace(/\*\*(.*?)\*\*/g, "$1");
+      text = text.replace(/__(.*?)__/g, "$1");
+      text = text.replace(/[`*_]/g, "");
+      text = text.replace(/#/g, "");
+      return text.trimEnd();
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function compactSocialDraft(draft) {
   if (!draft?.content) return null;
   return {
     platform: draft.platform,
     platformLabel: draft.platformLabel,
-    content: draft.content,
+    content: sanitizeXhsDraftContent(draft.content),
     model: draft.model || "",
     latencyMs: draft.latencyMs || 0,
   };
@@ -1850,12 +2004,14 @@ function ImageGenerationWorkflow({ data }) {
   const [result, setResult] = useState(() => latestHistory?.result || null);
   const [socialPlatform, setSocialPlatform] = useState(() => latestHistory?.socialPlatform || latestHistory?.socialDraft?.platform || "xhs");
   const [socialDraft, setSocialDraft] = useState(() => latestHistory?.socialDraft || null);
+  const [noteDetail, setNoteDetail] = useState(() => latestHistory?.noteDetail || null);
   const [historyItems, setHistoryItems] = useState(initialHistory);
   const [promptOpen, setPromptOpen] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
   const [editingSlot, setEditingSlot] = useState(null);
   const [editingSourceImage, setEditingSourceImage] = useState(null);
   const [editInstruction, setEditInstruction] = useState("");
+  const [editImageCount, setEditImageCount] = useState("1");
   const [editingImage, setEditingImage] = useState(false);
   const noteOptions = useMemo(
     () =>
@@ -1865,6 +2021,14 @@ function ImageGenerationWorkflow({ data }) {
       })),
     [noteRows],
   );
+
+  useEffect(() => {
+    function handleHistorySync() {
+      setHistoryItems(readImageWorkflowHistory());
+    }
+    window.addEventListener(imageWorkflowHistoryUpdatedEvent, handleHistorySync);
+    return () => window.removeEventListener(imageWorkflowHistoryUpdatedEvent, handleHistorySync);
+  }, []);
 
   function updateForm(patch) {
     setForm((current) => ({ ...current, ...patch }));
@@ -1898,6 +2062,7 @@ function ImageGenerationWorkflow({ data }) {
       result: compactResult,
       socialPlatform,
       socialDraft: compactSocialDraft(nextSocialDraft),
+      sourceImages: sourceImagesForNote(noteDetail),
     };
     const next = upsertImageWorkflowHistoryItem(item, historyItems);
     setHistoryItems(next);
@@ -1908,9 +2073,11 @@ function ImageGenerationWorkflow({ data }) {
     setResult(item.result || null);
     setSocialPlatform(item.socialPlatform || item.socialDraft?.platform || "xhs");
     setSocialDraft(item.socialDraft || null);
+    setNoteDetail(item.noteDetail || null);
     setEditingSlot(null);
     setEditingSourceImage(null);
     setEditInstruction("");
+    setEditImageCount("1");
     setMessage("已恢复历史产出");
     setSocialMessage(item.socialDraft?.content ? "已恢复历史社媒草稿" : "");
   }
@@ -1936,6 +2103,7 @@ function ImageGenerationWorkflow({ data }) {
         method: "POST",
         body: JSON.stringify({ noteId }),
       });
+      setNoteDetail(payload.note || null);
       setForm((current) => imageWorkflowFormFromNote(payload.note || {}, current));
       const promptCount = Number(payload.note?.image_prompt_count || 0);
       const promptWarning = payload.note?.image_prompt_warning ? `，逐图提示词暂未读取：${payload.note.image_prompt_warning}` : "";
@@ -1947,28 +2115,11 @@ function ImageGenerationWorkflow({ data }) {
     }
   }
 
-  async function handleReferenceImage(event) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (file.size > 8 * 1024 * 1024) {
-      setMessage("垫图请控制在 8MB 以内");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      updateForm({
-        referenceImage: String(reader.result || ""),
-        referenceImageName: file.name,
-      });
-    };
-    reader.onerror = () => setMessage("垫图读取失败");
-    reader.readAsDataURL(file);
-  }
-
   function openImageEdit(slot, sourceImage = null) {
     setEditingSlot(slot);
     setEditingSourceImage(sourceImage);
     setEditInstruction("");
+    setEditImageCount("1");
     setMessage("");
   }
 
@@ -1976,6 +2127,7 @@ function ImageGenerationWorkflow({ data }) {
     event.preventDefault();
     const slot = normalizeWorkflowImageCount(editingSlot);
     const instruction = editInstruction.trim();
+    const editCount = Math.min(2, normalizeWorkflowImageCount(editImageCount));
     const sourceSlot = imageSlotItems(result).find((item) => item.slot === slot);
     const sourceImage = editingSourceImage?.url ? editingSourceImage : sourceSlot?.image;
     if (!sourceImage?.url) {
@@ -1989,9 +2141,12 @@ function ImageGenerationWorkflow({ data }) {
 
     const startedAt = Date.now();
     const originalPrompt = imagePromptAt(form, slot) || form.imagePrompt || "";
-    const editPrompt = buildImageEditPrompt({ slot, originalPrompt, instruction });
+    const editPrompts = Array.from({ length: editCount }, (_, index) => ({
+      slot: index + 1,
+      prompt: buildImageEditPrompt({ slot, originalPrompt, instruction, branchIndex: index + 1, branchTotal: editCount }),
+    }));
     setEditingImage(true);
-    setMessage(`第${slot}张改图任务创建中`);
+    setMessage(editCount > 1 ? `第${slot}张改图并派生新图任务创建中` : `第${slot}张改图任务创建中`);
     try {
       const payload = await requestJson("/api/image-generate", {
         method: "POST",
@@ -2003,48 +2158,48 @@ function ImageGenerationWorkflow({ data }) {
           userPain: form.userPain,
           businessLogic: form.businessLogic,
           businessKnowledge: form.businessKnowledge,
-          imagePrompt: form.imagePrompt,
-          imagePrompts: [{ slot: 1, prompt: editPrompt }],
-          unifiedVisualStyle: form.unifiedVisualStyle !== false,
+          imagePrompt: editPrompts.map((item) => item.prompt).join("\n\n"),
+          imagePrompts: editPrompts,
+          unifiedVisualStyle: false,
           referenceImage: sourceImage.url,
           workflowAction: "image_edit",
           editSlot: slot,
           size: form.size,
-          imageCount: 1,
+          imageCount: editCount,
         }),
       });
-      let editImages = (payload.images || []).map((image) => ({ ...image, slot }));
-      let taskState = (payload.tasks?.length ? payload.tasks : [{ slot, taskId: payload.taskId, images: editImages }]).map((task) => ({
-        slot,
+      let editImages = (payload.images || []).map((image) => ({ ...image, sourceEditSlot: slot }));
+      let taskState = (payload.tasks?.length ? payload.tasks : [{ slot: 1, taskId: payload.taskId, images: editImages }]).map((task, index) => ({
+        slot: Number(task.slot || index + 1),
         taskId: task.taskId,
         status: task.images?.length ? "succeeded" : "processing",
-        images: (task.images || []).map((image) => ({ ...image, slot })),
+        images: (task.images || []).map((image) => ({ ...image, sourceEditSlot: slot })),
       }));
 
-      if (!editImages.length) {
+      if (editImages.length < editCount) {
         if (!taskState.some((task) => task.taskId)) throw new Error("改图任务创建成功，但没有返回任务 ID");
-        setMessage(`第${slot}张改图生成中`);
+        setMessage(editCount > 1 ? `第${slot}张改图与新增图生成中` : `第${slot}张改图生成中`);
         for (let attempt = 0; attempt < maxImageTaskPollAttempts; attempt += 1) {
           await wait(imageTaskPollDelay(attempt));
-          const task = taskState[0];
-          if (!task?.taskId) continue;
-          const taskPayload = await requestJson(`/api/image-task?taskId=${encodeURIComponent(task.taskId)}`);
-          taskState = [
-            {
+          for (let index = 0; index < taskState.length; index += 1) {
+            const task = taskState[index];
+            if (!task?.taskId || task.images?.length) continue;
+            const taskPayload = await requestJson(`/api/image-task?taskId=${encodeURIComponent(task.taskId)}`);
+            taskState[index] = {
               ...task,
               status: taskPayload.status,
-              images: (taskPayload.images || []).map((image) => ({ ...image, slot })),
-            },
-          ];
-          editImages = taskState[0].images || [];
-          if (taskPayload.status === "failed") throw new Error(taskPayload.error || `第${slot}张改图失败`);
-          if (editImages.length) break;
-          setMessage(`第${slot}张${imageTaskStatusLabel(taskPayload.status)}`);
+              images: (taskPayload.images || []).map((image) => ({ ...image, sourceEditSlot: slot })),
+            };
+            if (taskPayload.status === "failed") throw new Error(taskPayload.error || `第${slot}张改图失败`);
+          }
+          editImages = taskState.flatMap((task) => task.images || []);
+          if (editImages.length >= editCount) break;
+          const pendingLabels = taskState.filter((task) => !task.images?.length).map((task) => `派生${task.slot}${imageTaskStatusLabel(task.status)}`);
+          setMessage(pendingLabels.join("，") || `第${slot}张改图生成中`);
         }
       }
 
-      const editImage = editImages[0];
-      if (!editImage?.url) throw new Error("改图任务仍在处理中，请稍后重试");
+      if (editImages.length < editCount) throw new Error("改图任务仍在处理中，请稍后重试");
       const editResult = {
         ...payload,
         tasks: taskState,
@@ -2052,12 +2207,13 @@ function ImageGenerationWorkflow({ data }) {
         status: "succeeded",
         latencyMs: Date.now() - startedAt,
       };
-      const nextResult = appendEditedSlotImage(result, slot, editResult, editImage, instruction, Date.now() - startedAt);
+      const nextResult = appendEditedImages(result, slot, editResult, editImages.slice(0, editCount), instruction, Date.now() - startedAt);
       setResult(nextResult);
       persistHistoryItem(nextResult);
       setEditingSlot(null);
       setEditingSourceImage(null);
       setEditInstruction("");
+      setEditImageCount("1");
       setMessage(payload.logWarning ? `第${slot}张已改图，监控日志写入提示：${payload.logWarning}` : `第${slot}张已改图并写入监控日志`);
     } catch (error) {
       setMessage(error.message);
@@ -2209,8 +2365,9 @@ function ImageGenerationWorkflow({ data }) {
           businessLogic: form.businessLogic,
           businessKnowledge: form.businessKnowledge,
           imagePrompt: promptPayloadForSave(form),
-          socialContent: socialDraft?.content || "",
+          socialContent: sanitizeXhsDraftContent(socialDraft?.content || ""),
           images: generatedImagesForSave(result),
+          sourceImages: sourceImagesForNote(noteDetail),
         }),
       });
       if (!response.ok) {
@@ -2298,12 +2455,7 @@ function ImageGenerationWorkflow({ data }) {
           )}
         </div>
 
-        <div className="image-reference-row image-generation-options">
-          <label className="image-reference-upload">
-            <Upload size={16} />
-            <span>{form.referenceImageName || "上传垫图"}</span>
-            <input accept="image/*" type="file" onChange={handleReferenceImage} />
-          </label>
+        <div className="image-generation-options">
           <SelectControl
             value={form.size}
             onChange={(value) => updateForm({ size: value })}
@@ -2334,15 +2486,6 @@ function ImageGenerationWorkflow({ data }) {
             <span>统一风格/配色</span>
           </label>
         </div>
-
-        {form.referenceImage ? (
-          <div className="image-reference-preview">
-            <img src={form.referenceImage} alt="垫图预览" />
-            <button className="copy-button" type="button" onClick={() => updateForm({ referenceImage: "", referenceImageName: "" })}>
-              移除垫图
-            </button>
-          </div>
-        ) : null}
 
         <div className="image-workflow-actions">
           <button className="primary-button" type="submit" disabled={generating}>
@@ -2432,6 +2575,7 @@ function ImageGenerationWorkflow({ data }) {
                   setEditingSlot(null);
                   setEditingSourceImage(null);
                   setEditInstruction("");
+                  setEditImageCount("1");
                 }}
                 disabled={editingImage}
               >
@@ -2441,9 +2585,20 @@ function ImageGenerationWorkflow({ data }) {
             <textarea
               value={editInstruction}
               onChange={(event) => setEditInstruction(event.target.value)}
-              placeholder="只写这次要改的点，例如：把标题换成更短的反常识表达，保留当前配色和版式"
+              placeholder="只写这次要改的点；如果选择派生2张，可以写：把这张拆成问题页和方法页"
               rows={4}
             />
+            <div className="image-edit-options">
+              <SelectControl
+                value={editImageCount}
+                onChange={setEditImageCount}
+                label="输出"
+                options={[
+                  { value: "1", label: "改图 1 张" },
+                  { value: "2", label: "改图 + 新图 2 张" },
+                ]}
+              />
+            </div>
             <div className="image-edit-actions">
               <button className="primary-button" type="submit" disabled={editingImage}>
                 {editingImage ? "改图中" : "确认改图"}
@@ -2551,6 +2706,7 @@ const fixedContentLineConfigs = [
 ];
 
 const fixedRewriteSteps = ["读取笔记资产", "创建生图任务", "轮询图片结果", "生成小红书文案", "洗稿完成"];
+const reviewDraftSteps = ["读取草稿", "调用豆包改文案", "调用多米改图", "写回草稿池"];
 const fixedImageSizeOptions = [
   { value: "1024x1536", label: "小红书竖图 1024x1536" },
   { value: "1024x1024", label: "小红书方图 1024x1024" },
@@ -2684,6 +2840,7 @@ function FixedContentFlow({ data }) {
   const [editingSlot, setEditingSlot] = useState(null);
   const [editingSourceImage, setEditingSourceImage] = useState(null);
   const [editInstruction, setEditInstruction] = useState("");
+  const [editImageCount, setEditImageCount] = useState("1");
   const [editingImage, setEditingImage] = useState(false);
   const [historyItems, setHistoryItems] = useState(initialHistory);
 
@@ -2767,6 +2924,7 @@ function FixedContentFlow({ data }) {
       createdAt: finalResult.producedAt || new Date().toISOString(),
       form: historyFormSnapshot(finalResult.form || emptyImageWorkflowForm),
       result: compactResult,
+      sourceImages: Array.isArray(finalResult.sourceImages) ? finalResult.sourceImages.filter((image) => image?.url).slice(0, maxWorkflowImages) : [],
       socialPlatform: "xhs",
       socialDraft: compactSocialDraft(nextSocialDraft),
       noteId: finalResult.form?.noteId || "",
@@ -2792,7 +2950,7 @@ function FixedContentFlow({ data }) {
       form: { ...emptyImageWorkflowForm, ...(item.form || {}) },
       imageResult: item.result || null,
       socialDraft: item.socialDraft || null,
-      sourceImages: [],
+      sourceImages: Array.isArray(item.sourceImages) ? item.sourceImages : [],
       producedAt: item.createdAt || new Date().toISOString(),
       historyId: item.id,
       lineId: item.lineId || selectedLine.id,
@@ -2803,6 +2961,7 @@ function FixedContentFlow({ data }) {
     setEditingSlot(null);
     setEditingSourceImage(null);
     setEditInstruction("");
+    setEditImageCount("1");
     setProgress({ status: "done", activeStep: 4, message: "已恢复历史草稿" });
   }
 
@@ -2942,6 +3101,7 @@ function FixedContentFlow({ data }) {
     setEditingSlot(slot);
     setEditingSourceImage(sourceImage);
     setEditInstruction("");
+    setEditImageCount("1");
     setProgress((current) => ({ ...current, message: `准备修改第${slot}张图` }));
   }
 
@@ -2949,6 +3109,7 @@ function FixedContentFlow({ data }) {
     event.preventDefault();
     const slot = normalizeWorkflowImageCount(editingSlot);
     const instruction = editInstruction.trim();
+    const editCount = Math.min(2, normalizeWorkflowImageCount(editImageCount));
     const currentImageResult = fixedResult?.imageResult;
     const sourceSlot = imageSlotItems(currentImageResult).find((item) => item.slot === slot);
     const sourceImage = editingSourceImage?.url ? editingSourceImage : sourceSlot?.image;
@@ -2963,9 +3124,12 @@ function FixedContentFlow({ data }) {
 
     const startedAt = Date.now();
     const originalPrompt = imagePromptAt(fixedResult.form || emptyImageWorkflowForm, slot) || fixedResult.form?.imagePrompt || "";
-    const editPrompt = buildImageEditPrompt({ slot, originalPrompt, instruction });
+    const editPrompts = Array.from({ length: editCount }, (_, index) => ({
+      slot: index + 1,
+      prompt: buildImageEditPrompt({ slot, originalPrompt, instruction, branchIndex: index + 1, branchTotal: editCount }),
+    }));
     setEditingImage(true);
-    setProgress((current) => ({ ...current, status: "running", activeStep: 1, message: `第${slot}张改图任务创建中` }));
+    setProgress((current) => ({ ...current, status: "running", activeStep: 1, message: editCount > 1 ? `第${slot}张改图并新增图任务创建中` : `第${slot}张改图任务创建中` }));
     try {
       const payload = await requestJson("/api/image-generate", {
         method: "POST",
@@ -2977,48 +3141,48 @@ function FixedContentFlow({ data }) {
           userPain: fixedResult.form.userPain,
           businessLogic: fixedResult.form.businessLogic,
           businessKnowledge: fixedResult.form.businessKnowledge,
-          imagePrompt: fixedResult.form.imagePrompt,
-          imagePrompts: [{ slot: 1, prompt: editPrompt }],
-          unifiedVisualStyle: fixedResult.form.unifiedVisualStyle !== false,
+          imagePrompt: editPrompts.map((item) => item.prompt).join("\n\n"),
+          imagePrompts: editPrompts,
+          unifiedVisualStyle: false,
           referenceImage: sourceImage.url,
           workflowAction: "image_edit",
           editSlot: slot,
           size: fixedResult.form.size,
-          imageCount: 1,
+          imageCount: editCount,
         }),
       });
-      let editImages = (payload.images || []).map((image) => ({ ...image, slot }));
-      let taskState = (payload.tasks?.length ? payload.tasks : [{ slot, taskId: payload.taskId, images: editImages }]).map((task) => ({
-        slot,
+      let editImages = (payload.images || []).map((image) => ({ ...image, sourceEditSlot: slot }));
+      let taskState = (payload.tasks?.length ? payload.tasks : [{ slot: 1, taskId: payload.taskId, images: editImages }]).map((task, index) => ({
+        slot: Number(task.slot || index + 1),
         taskId: task.taskId,
         status: task.images?.length ? "succeeded" : "processing",
-        images: (task.images || []).map((image) => ({ ...image, slot })),
+        images: (task.images || []).map((image) => ({ ...image, sourceEditSlot: slot })),
       }));
 
-      if (!editImages.length) {
+      if (editImages.length < editCount) {
         if (!taskState.some((task) => task.taskId)) throw new Error("改图任务创建成功，但没有返回任务 ID");
-        setProgress((current) => ({ ...current, activeStep: 2, message: `第${slot}张改图生成中` }));
+        setProgress((current) => ({ ...current, activeStep: 2, message: editCount > 1 ? `第${slot}张改图与新增图生成中` : `第${slot}张改图生成中` }));
         for (let attempt = 0; attempt < maxImageTaskPollAttempts; attempt += 1) {
           await wait(imageTaskPollDelay(attempt));
-          const task = taskState[0];
-          if (!task?.taskId) continue;
-          const taskPayload = await requestJson(`/api/image-task?taskId=${encodeURIComponent(task.taskId)}`);
-          taskState = [
-            {
+          for (let index = 0; index < taskState.length; index += 1) {
+            const task = taskState[index];
+            if (!task?.taskId || task.images?.length) continue;
+            const taskPayload = await requestJson(`/api/image-task?taskId=${encodeURIComponent(task.taskId)}`);
+            taskState[index] = {
               ...task,
               status: taskPayload.status,
-              images: (taskPayload.images || []).map((image) => ({ ...image, slot })),
-            },
-          ];
-          editImages = taskState[0].images || [];
-          if (taskPayload.status === "failed") throw new Error(taskPayload.error || `第${slot}张改图失败`);
-          if (editImages.length) break;
-          setProgress((current) => ({ ...current, activeStep: 2, message: `第${slot}张${imageTaskStatusLabel(taskPayload.status)}` }));
+              images: (taskPayload.images || []).map((image) => ({ ...image, sourceEditSlot: slot })),
+            };
+            if (taskPayload.status === "failed") throw new Error(taskPayload.error || `第${slot}张改图失败`);
+          }
+          editImages = taskState.flatMap((task) => task.images || []);
+          if (editImages.length >= editCount) break;
+          const pendingLabels = taskState.filter((task) => !task.images?.length).map((task) => `派生${task.slot}${imageTaskStatusLabel(task.status)}`);
+          setProgress((current) => ({ ...current, activeStep: 2, message: pendingLabels.join("，") || `第${slot}张${imageTaskStatusLabel("processing")}` }));
         }
       }
 
-      const editImage = editImages[0];
-      if (!editImage?.url) throw new Error("改图任务仍在处理中，请稍后重试");
+      if (editImages.length < editCount) throw new Error("改图任务仍在处理中，请稍后重试");
       const editResult = {
         ...payload,
         tasks: taskState,
@@ -3026,7 +3190,7 @@ function FixedContentFlow({ data }) {
         status: "succeeded",
         latencyMs: Date.now() - startedAt,
       };
-      const nextResult = appendEditedSlotImage(currentImageResult, slot, editResult, editImage, instruction, Date.now() - startedAt);
+      const nextResult = appendEditedImages(currentImageResult, slot, editResult, editImages.slice(0, editCount), instruction, Date.now() - startedAt);
       const nextFixedResult = {
         ...fixedResult,
         imageResult: nextResult,
@@ -3037,6 +3201,7 @@ function FixedContentFlow({ data }) {
       setEditingSlot(null);
       setEditingSourceImage(null);
       setEditInstruction("");
+      setEditImageCount("1");
       setProgress({ status: "done", activeStep: 4, message: `第${slot}张已改图` });
     } catch (error) {
       setProgress({ status: "failed", activeStep: Math.min(progress.activeStep || 0, fixedRewriteSteps.length - 1), message: error.message || "改图失败" });
@@ -3046,7 +3211,7 @@ function FixedContentFlow({ data }) {
   }
 
   async function copyFixedDraft() {
-    const content = fixedResult?.socialDraft?.content || "";
+    const content = sanitizeXhsDraftContent(fixedResult?.socialDraft?.content || "");
     if (!content) return;
     try {
       await navigator.clipboard?.writeText(content);
@@ -3075,8 +3240,9 @@ function FixedContentFlow({ data }) {
           businessLogic: fixedResult.form.businessLogic,
           businessKnowledge: fixedResult.form.businessKnowledge,
           imagePrompt: promptPayloadForSave(fixedResult.form),
-          socialContent: fixedResult.socialDraft?.content || "",
+          socialContent: sanitizeXhsDraftContent(fixedResult.socialDraft?.content || ""),
           images: generatedImagesForSave(fixedResult.imageResult),
+          sourceImages: Array.isArray(fixedResult.sourceImages) ? fixedResult.sourceImages.filter((image) => image?.url).slice(0, maxWorkflowImages) : [],
         }),
       });
       if (!response.ok) {
@@ -3126,7 +3292,16 @@ function FixedContentFlow({ data }) {
           <div className="fixed-result-grid">
             <section className="fixed-social-output">
               <SectionHeader icon={FileText} title="小红书文案" action={fixedResult.socialDraft?.model ? <StatusPill tone="green">{fixedResult.socialDraft.model}</StatusPill> : null} />
-              <textarea readOnly value={fixedResult.socialDraft?.content || ""} rows={22} />
+              <div className="fixed-social-compare">
+                <label>
+                  <span>洗稿前文案</span>
+                  <textarea readOnly value={fixedResult.form.content || ""} rows={10} />
+                </label>
+                <label>
+                  <span>洗稿后文案</span>
+                  <textarea readOnly value={sanitizeXhsDraftContent(fixedResult.socialDraft?.content || "")} rows={14} />
+                </label>
+              </div>
             </section>
             <section className="fixed-image-output">
               <SectionHeader icon={ImagePlus} title="生成图片" action={<StatusPill tone="neutral">{formatNumber(images.length)} 张</StatusPill>} />
@@ -3154,10 +3329,11 @@ function FixedContentFlow({ data }) {
                     <button
                       className="copy-button"
                       type="button"
-                      onClick={() => {
+                    onClick={() => {
                         setEditingSlot(null);
                         setEditingSourceImage(null);
                         setEditInstruction("");
+                        setEditImageCount("1");
                       }}
                       disabled={editingImage}
                     >
@@ -3167,9 +3343,20 @@ function FixedContentFlow({ data }) {
                   <textarea
                     value={editInstruction}
                     onChange={(event) => setEditInstruction(event.target.value)}
-                    placeholder="只写这次要改的点，例如：把标题换成更短的反常识表达，保留当前配色和版式"
+                    placeholder="只写这次要改的点；如果要拆成两张图，可以写清楚两张图各自承担什么内容"
                     rows={4}
                   />
+                  <div className="image-edit-options">
+                    <SelectControl
+                      value={editImageCount}
+                      onChange={setEditImageCount}
+                      label="输出"
+                      options={[
+                        { value: "1", label: "改图 1 张" },
+                        { value: "2", label: "改图 + 新图 2 张" },
+                      ]}
+                    />
+                  </div>
                   <div className="image-edit-actions">
                     <button className="primary-button" type="submit" disabled={editingImage}>
                       {editingImage ? "改图中" : "确认改图"}
@@ -3374,7 +3561,7 @@ function FixedContentFlow({ data }) {
                             </button>
                           </div>
                         </div>
-                        <p className="fixed-history-preview">{textPreview(item.socialDraft?.content || "", 180) || "暂无社媒草稿"}</p>
+                        <p className="fixed-history-preview">{textPreview(sanitizeXhsDraftContent(item.socialDraft?.content || ""), 180) || "暂无社媒草稿"}</p>
                         <div className="image-history-thumbs fixed-history-thumbs">
                           {generatedImagesForSave(item.result).map((image, index) => (
                             <button type="button" key={`${item.id}-${image.slot}-${image.version}-${index}`} onClick={() => setPreviewImage(image)}>
@@ -3405,6 +3592,547 @@ function FixedContentFlow({ data }) {
           )}
         </section>
       </section>
+      {previewImage ? (
+        <div className="image-preview-backdrop" onClick={() => setPreviewImage(null)} role="presentation">
+          <div className="image-preview-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <button className="icon-button" type="button" onClick={() => setPreviewImage(null)} aria-label="关闭图片预览">
+              <XCircle size={18} />
+            </button>
+            <img src={previewImage.url} alt="图片预览" />
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function DraftReviewFlow({ data }) {
+  const initialDrafts = useMemo(() => readReviewDrafts(), []);
+  const [drafts, setDrafts] = useState(initialDrafts);
+  const [selectedReviewId, setSelectedReviewId] = useState(() => initialDrafts[0]?.reviewId || "");
+  const [noteDetail, setNoteDetail] = useState(null);
+  const [loadingNoteDetail, setLoadingNoteDetail] = useState(false);
+  const [detailMessage, setDetailMessage] = useState("");
+  const [progress, setProgress] = useState({ status: "idle", activeStep: 0, message: "选择一条待审核草稿查看原文、改文案和改图" });
+  const [previewImage, setPreviewImage] = useState(null);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [editingSocial, setEditingSocial] = useState(false);
+  const [socialEditInstruction, setSocialEditInstruction] = useState("");
+  const [editingSlot, setEditingSlot] = useState(null);
+  const [editingSourceImage, setEditingSourceImage] = useState(null);
+  const [editInstruction, setEditInstruction] = useState("");
+  const [editImageCount, setEditImageCount] = useState("1");
+  const [editingImage, setEditingImage] = useState(false);
+
+  useEffect(() => {
+    function syncDrafts() {
+      setDrafts(readReviewDrafts());
+    }
+    window.addEventListener(imageWorkflowHistoryUpdatedEvent, syncDrafts);
+    window.addEventListener(fixedContentHistoryUpdatedEvent, syncDrafts);
+    return () => {
+      window.removeEventListener(imageWorkflowHistoryUpdatedEvent, syncDrafts);
+      window.removeEventListener(fixedContentHistoryUpdatedEvent, syncDrafts);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!drafts.length) {
+      setSelectedReviewId("");
+      return;
+    }
+    if (!drafts.some((item) => item.reviewId === selectedReviewId)) {
+      setSelectedReviewId(drafts[0]?.reviewId || "");
+    }
+  }, [drafts, selectedReviewId]);
+
+  const selectedDraft = drafts.find((item) => item.reviewId === selectedReviewId) || drafts[0] || null;
+  const selectedNoteId = draftItemNoteId(selectedDraft);
+  const selectedTitle = draftItemTitle(selectedDraft);
+  const selectedSocialContent = draftItemSocialContent(selectedDraft);
+  const generatedImages = draftItemImages(selectedDraft);
+  const sourceImages = noteDetail?.source_images?.length ? sourceImagesForNote(noteDetail) : draftItemSourceImages(selectedDraft);
+  const originalContent = sanitizeXhsDraftContent(noteDetail?.content || selectedDraft?.form?.content || "");
+  const selectedMetrics = noteDetail || selectedDraft || {};
+
+  useEffect(() => {
+    if (!selectedNoteId) {
+      setNoteDetail(null);
+      setDetailMessage("");
+      return undefined;
+    }
+
+    let alive = true;
+    setLoadingNoteDetail(true);
+    setDetailMessage("");
+    requestJson("/api/image-note", {
+      method: "POST",
+      body: JSON.stringify({ noteId: selectedNoteId }),
+    })
+      .then((payload) => {
+        if (!alive) return;
+        setNoteDetail(payload.note || null);
+      })
+      .catch((error) => {
+        if (!alive) return;
+        setNoteDetail(null);
+        setDetailMessage(error.message || "读取笔记详情失败");
+      })
+      .finally(() => {
+        if (alive) setLoadingNoteDetail(false);
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [selectedNoteId]);
+
+  function persistDraft(nextDraft) {
+    const normalized = writeReviewDraftItem(nextDraft);
+    setDrafts(readReviewDrafts());
+    setSelectedReviewId(normalized.reviewId);
+    return normalized;
+  }
+
+  function updateProgress(activeStep, message, status = "running") {
+    setProgress({ status, activeStep, message });
+  }
+
+  function resetImageEdit() {
+    setEditingSlot(null);
+    setEditingSourceImage(null);
+    setEditInstruction("");
+    setEditImageCount("1");
+  }
+
+  function openImageEdit(slot, sourceImage = null) {
+    setEditingSlot(slot);
+    setEditingSourceImage(sourceImage);
+    setEditInstruction("");
+    setEditImageCount("1");
+    updateProgress(2, `准备修改第${slot}张图`);
+  }
+
+  async function regenerateSocialDraft(event) {
+    event.preventDefault();
+    if (!selectedDraft) {
+      setProgress({ status: "failed", activeStep: 0, message: "请先选择一条待审核草稿" });
+      return;
+    }
+    if (!selectedNoteId) {
+      setProgress({ status: "failed", activeStep: 0, message: "缺少 note_id，无法改文案" });
+      return;
+    }
+
+    const startedAt = Date.now();
+    setEditingSocial(true);
+    updateProgress(1, selectedSocialContent ? "调用豆包改写文案" : "调用豆包生成文案");
+    try {
+      const payload = await requestJson("/api/social-generate", {
+        method: "POST",
+        body: JSON.stringify({
+          platform: selectedDraft.socialPlatform || "xhs",
+          noteId: selectedNoteId,
+          title: noteDetail?.title || selectedDraft.form?.title || "",
+          content: noteDetail?.content || selectedDraft.form?.content || "",
+          targetPersona: noteDetail?.primary_target_persona || selectedDraft.form?.targetPersona || "",
+          userPain: noteDetail?.true_pain_label || selectedDraft.form?.userPain || "",
+          businessLogic: noteDetail?.business_logic || selectedDraft.form?.businessLogic || "",
+          businessKnowledge: noteDetail?.business_knowledge || selectedDraft.form?.businessKnowledge || "",
+          imagePrompt: promptPayloadForSave(selectedDraft.form || emptyImageWorkflowForm),
+          images: generatedImages,
+          workflowAction: selectedSocialContent ? "social_edit" : "social_generate",
+          currentSocialContent: selectedSocialContent,
+          editInstruction: socialEditInstruction.trim(),
+        }),
+      });
+
+      persistDraft({
+        ...selectedDraft,
+        socialPlatform: payload.platform || selectedDraft.socialPlatform || "xhs",
+        socialDraft: {
+          platform: payload.platform || selectedDraft.socialPlatform || "xhs",
+          platformLabel: payload.platformLabel || socialPlatformLabels[payload.platform] || "小红书",
+          content: sanitizeXhsDraftContent(payload.content),
+          model: payload.model || "",
+          latencyMs: payload.latencyMs || 0,
+        },
+      });
+      setSocialEditInstruction("");
+      updateProgress(3, payload.logWarning ? `文案已更新，监控日志：${payload.logWarning}` : "文案已更新", "done");
+    } catch (error) {
+      setProgress({ status: "failed", activeStep: 1, message: error.message || "文案生成失败" });
+    } finally {
+      setEditingSocial(false);
+    }
+  }
+
+  async function editDraftImage(event) {
+    event.preventDefault();
+    if (!selectedDraft) {
+      setProgress({ status: "failed", activeStep: 0, message: "请先选择一条待审核草稿" });
+      return;
+    }
+    const slot = normalizeWorkflowImageCount(editingSlot);
+    const instruction = editInstruction.trim();
+    const editCount = Math.min(2, normalizeWorkflowImageCount(editImageCount));
+    const currentImageResult = selectedDraft?.result;
+    const sourceSlot = imageSlotItems(currentImageResult).find((item) => item.slot === slot);
+    const sourceImage = editingSourceImage?.url ? editingSourceImage : sourceSlot?.image;
+    if (!sourceImage?.url) {
+      setProgress({ status: "failed", activeStep: 2, message: "请先选择当前草稿里的图片后再改图" });
+      return;
+    }
+    if (!instruction) {
+      setProgress({ status: "failed", activeStep: 2, message: "请填写这次要修改的点" });
+      return;
+    }
+
+    const startedAt = Date.now();
+    const originalPrompt = imagePromptAt(selectedDraft.form || emptyImageWorkflowForm, slot) || selectedDraft.form?.imagePrompt || "";
+    const editPrompts = Array.from({ length: editCount }, (_, index) => ({
+      slot: index + 1,
+      prompt: buildImageEditPrompt({ slot, originalPrompt, instruction, branchIndex: index + 1, branchTotal: editCount }),
+    }));
+    setEditingImage(true);
+    updateProgress(2, editCount > 1 ? `第${slot}张改图并派生${editCount}张图任务创建中` : `第${slot}张改图任务创建中`);
+    try {
+      const payload = await requestJson("/api/image-generate", {
+        method: "POST",
+        body: JSON.stringify({
+          noteId: selectedNoteId,
+          title: selectedDraft.form?.title || noteDetail?.title || "",
+          content: selectedDraft.form?.content || noteDetail?.content || "",
+          targetPersona: selectedDraft.form?.targetPersona || noteDetail?.primary_target_persona || "",
+          userPain: selectedDraft.form?.userPain || noteDetail?.true_pain_label || "",
+          businessLogic: selectedDraft.form?.businessLogic || noteDetail?.business_logic || "",
+          businessKnowledge: selectedDraft.form?.businessKnowledge || noteDetail?.business_knowledge || "",
+          imagePrompt: editPrompts.map((item) => item.prompt).join("\n\n"),
+          imagePrompts: editPrompts,
+          unifiedVisualStyle: false,
+          referenceImage: sourceImage.url,
+          workflowAction: "image_edit",
+          editSlot: slot,
+          size: selectedDraft.form?.size || "1024x1536",
+          imageCount: editCount,
+        }),
+      });
+
+      let editImages = (payload.images || []).map((image) => ({ ...image, sourceEditSlot: slot }));
+      let taskState = (payload.tasks?.length ? payload.tasks : [{ slot: 1, taskId: payload.taskId, images: editImages }]).map((task, index) => ({
+        slot: Number(task.slot || index + 1),
+        taskId: task.taskId,
+        status: task.images?.length ? "succeeded" : "processing",
+        images: (task.images || []).map((image) => ({ ...image, sourceEditSlot: slot })),
+      }));
+
+      if (editImages.length < editCount) {
+        if (!taskState.some((task) => task.taskId)) throw new Error("改图任务创建成功，但没有返回任务 ID");
+        updateProgress(2, editCount > 1 ? `第${slot}张改图与新增图生成中` : `第${slot}张改图生成中`);
+        for (let attempt = 0; attempt < maxImageTaskPollAttempts; attempt += 1) {
+          await wait(imageTaskPollDelay(attempt));
+          for (let index = 0; index < taskState.length; index += 1) {
+            const task = taskState[index];
+            if (!task?.taskId || task.images?.length) continue;
+            const taskPayload = await requestJson(`/api/image-task?taskId=${encodeURIComponent(task.taskId)}`);
+            taskState[index] = {
+              ...task,
+              status: taskPayload.status,
+              images: (taskPayload.images || []).map((image) => ({ ...image, sourceEditSlot: slot })),
+            };
+            if (taskPayload.status === "failed") throw new Error(taskPayload.error || `第${slot}张改图失败`);
+          }
+          editImages = taskState.flatMap((task) => task.images || []);
+          if (editImages.length >= editCount) break;
+          const pendingLabels = taskState.filter((task) => !task.images?.length).map((task) => `派生${task.slot}${imageTaskStatusLabel(task.status)}`);
+          updateProgress(2, pendingLabels.join("，") || `第${slot}张${imageTaskStatusLabel("processing")}`);
+        }
+      }
+
+      if (editImages.length < editCount) throw new Error("改图任务仍在处理中，请稍后重试");
+      const editResult = {
+        ...payload,
+        tasks: taskState,
+        images: editImages,
+        status: "succeeded",
+        latencyMs: Date.now() - startedAt,
+      };
+      const nextResult = appendEditedImages(currentImageResult, slot, editResult, editImages.slice(0, editCount), instruction, Date.now() - startedAt);
+      persistDraft({
+        ...selectedDraft,
+        result: nextResult,
+      });
+      resetImageEdit();
+      updateProgress(3, `第${slot}张已改图`, "done");
+    } catch (error) {
+      setProgress({ status: "failed", activeStep: 2, message: error.message || "改图失败" });
+    } finally {
+      setEditingImage(false);
+    }
+  }
+
+  async function copyDraftContent() {
+    const content = selectedSocialContent;
+    if (!content) return;
+    try {
+      await navigator.clipboard?.writeText(content);
+      updateProgress(3, "小红书文案已复制", "done");
+    } catch {
+      updateProgress(3, "复制失败，请手动选中文案", "failed");
+    }
+  }
+
+  async function downloadDraftPackage() {
+    if (!selectedDraft) return;
+    setSavingDraft(true);
+    try {
+      const response = await fetch("/api/draft-package", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          draftPackagePayloadFromItem(selectedDraft, {
+            socialContent: selectedSocialContent,
+            sourceImages,
+            noteDetail,
+          }),
+        ),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `HTTP ${response.status}`);
+      }
+      const blob = await response.blob();
+      const filename = filenameFromDisposition(response.headers.get("content-disposition"), "待审核草稿.zip");
+      downloadBlob(blob, filename);
+      updateProgress(3, "草稿包已生成下载", "done");
+    } catch (error) {
+      updateProgress(3, error.message || "草稿包保存失败", "failed");
+    } finally {
+      setSavingDraft(false);
+    }
+  }
+
+  if (!selectedDraft) {
+    return (
+      <section className="draft-review-flow">
+        <section className="panel draft-review-empty-panel">
+          <SectionHeader icon={ListChecks} title="待审核草稿" action={<StatusPill tone="neutral">0条</StatusPill>} />
+          <div className="fixed-content-empty">
+            <Layers3 size={28} />
+            <strong>暂无待审核草稿</strong>
+            <span>先跑一次固定内容流或爆文洗稿流，历史会自动进这里</span>
+          </div>
+        </section>
+      </section>
+    );
+  }
+
+  return (
+    <section className="draft-review-flow">
+      <section className="panel draft-review-strip-panel">
+        <SectionHeader icon={ListChecks} title="待审核草稿" action={<StatusPill tone="neutral">{formatNumber(drafts.length)}条</StatusPill>} />
+        <div className="draft-review-strip">
+          {drafts.map((item) => {
+            const images = draftItemImages(item);
+            const socialContent = draftItemSocialContent(item);
+            const active = selectedDraft.reviewId === item.reviewId;
+            return (
+              <button
+                key={item.reviewId}
+                className={`draft-review-card ${active ? "active" : ""}`}
+                type="button"
+                onClick={() => setSelectedReviewId(item.reviewId)}
+              >
+                <div className="draft-review-card-head">
+                  <div>
+                    <span>{item.sourceLabel || "待审核草稿"}</span>
+                    <strong>{draftItemTitle(item)}</strong>
+                    <p>{item.lineShortTitle || item.lineTitle || draftItemNoteId(item) || "-"}</p>
+                  </div>
+                  <StatusPill tone={socialContent ? "green" : "amber"}>{socialContent ? "可审阅" : "待生成"}</StatusPill>
+                </div>
+                <div className="draft-review-thumb-row">
+                  {images.length ? (
+                    images.map((image) => (
+                      <span key={`${item.reviewId}-${image.slot}-${image.version}`} className="draft-review-thumb">
+                        <img src={image.url} alt={`草稿图 ${image.slot}-${image.version}`} />
+                        <em>{imageVersionBadge(image)}</em>
+                      </span>
+                    ))
+                  ) : (
+                    <div className="draft-review-thumb-empty">暂无图片</div>
+                  )}
+                </div>
+                <p className="draft-review-card-preview">{socialContent ? textPreview(socialContent, 110) : "暂无小红书文案"}</p>
+                <div className="draft-review-card-meta">
+                  <span>{formatDateTimeSecond(item.updatedAt || item.createdAt)}</span>
+                  <span>{formatNumber(images.length)} 张图</span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="panel draft-review-progress-panel">
+        <div className="fixed-progress-steps">
+          {reviewDraftSteps.map((step, index) => (
+            <span key={step} className={fixedProgressStepClass(progress, index)}>
+              {fixedProgressStepClass(progress, index) === "done" ? <CheckCircle2 size={14} /> : <Clock3 size={14} />}
+              {step}
+            </span>
+          ))}
+        </div>
+        <div className={`fixed-progress-message ${progress.status === "failed" ? "failed" : ""}`}>{progress.message}</div>
+      </section>
+
+      <section className="draft-review-grid">
+        <section className="panel draft-review-original-panel">
+          <SectionHeader icon={FileText} title="原红书内容" action={<StatusPill tone="blue">{draftItemSourceLabel(selectedDraft)}</StatusPill>} />
+          <div className="draft-review-head">
+            <div>
+              <strong>{selectedTitle}</strong>
+              <span>
+                {selectedNoteId || "-"} · {noteDetail?.author_nickname || selectedDraft.authorNickname || "-"} · {formatDateTimeSecond(noteDetail?.note_date || selectedDraft.noteDate || selectedDraft.createdAt)}
+              </span>
+            </div>
+            <div className="header-actions">
+              <button className="copy-button" type="button" onClick={copyDraftContent}>
+                复制文案
+              </button>
+              <button className="primary-button" type="button" onClick={downloadDraftPackage} disabled={savingDraft}>
+                <Save size={15} />
+                {savingDraft ? "下载中" : "下载内容包"}
+              </button>
+            </div>
+          </div>
+          <div className="note-analysis-metrics draft-review-metrics">
+            <NoteMetricChip label="互动" value={selectedMetrics.interaction_score} />
+            <NoteMetricChip label="赞" value={selectedMetrics.like_count} />
+            <NoteMetricChip label="藏" value={selectedMetrics.collected_count} />
+            <NoteMetricChip label="评" value={selectedMetrics.comments_count} />
+          </div>
+          <DetailTextBlock title="原笔记标题">
+            <p>{noteDetail?.title || selectedTitle || "-"}</p>
+          </DetailTextBlock>
+          <DetailTextBlock title="原笔记文案">
+            <textarea readOnly value={originalContent} rows={12} placeholder={loadingNoteDetail ? "原文读取中" : "暂无原文"} />
+          </DetailTextBlock>
+          <DetailTextBlock title="原笔记图片">
+            {sourceImages.length ? (
+              <div className="draft-review-source-grid">
+                {sourceImages.map((image) => (
+                  <button key={image.url} type="button" onClick={() => setPreviewImage(image)}>
+                    <img src={image.url} alt={`原笔记图片 ${image.slot}`} />
+                    <span>{image.slot}</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="fixed-source-empty">{loadingNoteDetail ? "原图读取中" : "暂无原图预览"}</div>
+            )}
+          </DetailTextBlock>
+        </section>
+
+        <section className="panel draft-review-copy-panel">
+          <SectionHeader
+            icon={FileText}
+            title="新红书文案"
+            action={
+              selectedDraft.socialDraft?.model ? (
+                <StatusPill tone="green">{selectedDraft.socialDraft.model}</StatusPill>
+              ) : (
+                <StatusPill tone={selectedSocialContent ? "green" : "amber"}>{selectedSocialContent ? "已清洗" : "待生成"}</StatusPill>
+              )
+            }
+          />
+          <div className="draft-review-head">
+            <div>
+              <strong>{draftItemTitle(selectedDraft)}</strong>
+              <span>
+                {selectedNoteId || "-"} · {selectedDraft.sourceLabel || "-"} · {formatDateTimeSecond(selectedDraft.updatedAt || selectedDraft.createdAt)}
+              </span>
+            </div>
+            <button className="copy-button" type="button" onClick={copyDraftContent}>
+              复制文案
+            </button>
+          </div>
+          <textarea readOnly value={selectedSocialContent} rows={16} placeholder={loadingNoteDetail ? "文案读取中" : "生成后的小红书文案会显示在这里"} />
+          <div className="draft-review-edit-card">
+            <ImageWorkflowField
+              label="文案修改提示词"
+              value={socialEditInstruction}
+              onChange={setSocialEditInstruction}
+              placeholder="例如：更口语、更短，保留关键数据，把结尾改成评论引导"
+              rows={4}
+            />
+            <div className="draft-review-actions">
+              <button className="primary-button" type="button" onClick={regenerateSocialDraft} disabled={editingSocial}>
+                <Sparkles size={15} />
+                {editingSocial ? "改文案中" : selectedSocialContent ? "改文案" : "生成文案"}
+              </button>
+            </div>
+          </div>
+          {detailMessage ? <div className="admin-message">{detailMessage}</div> : null}
+        </section>
+
+        <section className="panel draft-review-image-panel">
+          <SectionHeader icon={ImagePlus} title="洗稿图片" action={<StatusPill tone="neutral">{formatNumber(generatedImages.length)} 张</StatusPill>} />
+          <div className="draft-review-image-grid">
+            {generatedImages.map((item) => (
+              <div className="draft-review-image-card" key={item.key}>
+                <button type="button" className="draft-review-thumb-button" onClick={() => setPreviewImage(item.image)} disabled={!item.image?.url}>
+                  <img src={item.image.url} alt={`洗稿图片 ${item.slot} ${item.image.version || 1}`} />
+                  <span className="image-version-badge">{imageVersionBadge(item.image)}</span>
+                </button>
+                <div className="image-slot-actions">
+                  <button className="copy-button" type="button" onClick={() => openImageEdit(item.slot, item.image)} disabled={editingImage}>
+                    <PencilLine size={14} />
+                    改图
+                  </button>
+                  <span>{item.isLatest ? "最新版本" : "历史版本"}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+          {editingSlot ? (
+            <form className="image-edit-panel" onSubmit={editDraftImage}>
+              <div className="image-edit-head">
+                <strong>{imageVersionLabel(editingSourceImage || { slot: editingSlot })}</strong>
+                <button className="copy-button" type="button" onClick={resetImageEdit} disabled={editingImage}>
+                  取消
+                </button>
+              </div>
+              <textarea
+                value={editInstruction}
+                onChange={(event) => setEditInstruction(event.target.value)}
+                placeholder="只写这次要改的点；如果要拆成两张图，可以写清楚两张图各自承担什么内容"
+                rows={4}
+              />
+              <div className="image-edit-options">
+                <SelectControl
+                  value={editImageCount}
+                  onChange={setEditImageCount}
+                  label="输出"
+                  options={[
+                    { value: "1", label: "改图 1 张" },
+                    { value: "2", label: "改图 + 新图 2 张" },
+                  ]}
+                />
+              </div>
+              <div className="image-edit-actions">
+                <button className="primary-button" type="submit" disabled={editingImage}>
+                  {editingImage ? "改图中" : "确认改图"}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div className="draft-review-empty">{generatedImages.length ? "点击图片上的改图按钮继续调整" : "暂无图片结果"}</div>
+          )}
+        </section>
+      </section>
+
       {previewImage ? (
         <div className="image-preview-backdrop" onClick={() => setPreviewImage(null)} role="presentation">
           <div className="image-preview-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
@@ -5592,6 +6320,7 @@ export default function App() {
             </div>
           ) : null}
           {activeView === "fixedContent" ? <FixedContentFlow data={data} /> : null}
+          {activeView === "draftReview" ? <DraftReviewFlow data={data} /> : null}
           {activeView === "ops" ? <OpsDashboard data={data} apiDate={apiDate} onApiDateChange={handleApiDateChange} /> : null}
           {activeView === "models" ? <ModelConfigView data={data} /> : null}
           {activeView === "admin" ? <AdminConfigView currentUser={currentUser} permissionCatalog={permissionCatalog} /> : null}

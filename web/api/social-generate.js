@@ -11,7 +11,7 @@ const platformConfigs = {
   xhs: {
     label: "小红书",
     instruction:
-      "生成小红书图文笔记草稿。要求：标题有搜索关键词和点击欲；开头3秒抓住痛点；正文分段短、可扫读；给出封面文案建议、正文、话题标签和评论区引导。语气真实、具体、有生活感，不要夸张营销腔。",
+      "生成小红书图文笔记草稿。要求：标题有搜索关键词和点击欲；开头3秒抓住痛点；正文分段短、可扫读；给出封面文案建议、正文和评论区引导。语气真实、具体、有生活感，不要夸张营销腔，不要单独输出话题标签。",
   },
   douyin: {
     label: "抖音",
@@ -121,6 +121,28 @@ function extractResponseText(payload) {
   return "";
 }
 
+function sanitizePlainText(value) {
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => {
+      let text = String(line || "").trim();
+      if (/^(话题标签|标签|hashtags?)[:：]/i.test(text)) return "";
+      text = text.replace(/^(标题|正文|封面文案建议|评论区引导|小红书文案|新标题)[:：]\s*/g, "");
+      text = text.replace(/^#{1,6}\s*/g, "");
+      text = text.replace(/^[-*•]\s+/g, "");
+      text = text.replace(/^\d+[.)]\s+/g, "");
+      text = text.replace(/\*\*(.*?)\*\*/g, "$1");
+      text = text.replace(/__(.*?)__/g, "$1");
+      text = text.replace(/[`*_]/g, "");
+      text = text.replace(/#/g, "");
+      return text.trimEnd();
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function tokenUsage(payload) {
   const usage = payload?.usage && typeof payload.usage === "object" ? payload.usage : {};
   return {
@@ -133,17 +155,22 @@ function tokenUsage(payload) {
 
 function buildUserPrompt(input, platform) {
   const config = platformConfigs[platform] || platformConfigs.xhs;
+  const editInstruction = cleanText(input.editInstruction, 4000);
+  const currentSocialContent = cleanText(input.currentSocialContent, 20000);
+  const isEdit = String(input.workflowAction || "").toLowerCase() === "social_edit" || Boolean(editInstruction || currentSocialContent);
   const imageLines = Array.isArray(input.images)
     ? input.images
         .slice(0, MAX_WORKFLOW_IMAGES)
-        .map((image, index) => `第${index + 1}张图：${cleanText(image?.url || "", 400)}`)
+        .map((image, index) => `第${index + 1}张图：${cleanText(image?.label || image?.url || "", 400)}`)
         .join("\n")
     : "";
   return [
     `平台：${config.label}`,
     config.instruction,
     "",
-    "请基于下面的 GEO 内容资产生成可直接二次编辑的社媒草稿。不要编造无法从材料推导出的事实；如信息不足，用可替换占位表达。",
+    isEdit
+      ? "请基于下面的内容草稿和修改要求进行重写。不要保留不需要的旧表达，改文案时同时保留事实、结构、平台语气和可发布性。"
+      : "请基于下面的 GEO 内容资产生成可直接二次编辑的社媒草稿。不要编造无法从材料推导出的事实；如信息不足，用可替换占位表达。",
     "",
     "【强制改写与安全规则】",
     `当前日期：${currentDateText()}。`,
@@ -175,10 +202,13 @@ function buildUserPrompt(input, platform) {
     "【生图提示词】",
     cleanText(input.imagePrompt, MAX_IMAGE_PROMPT_CHARS),
     "",
+    isEdit && currentSocialContent ? "【当前社媒草稿】\n" + currentSocialContent : "",
+    isEdit && editInstruction ? `【本次修改要求】\n${editInstruction}` : "",
+    "",
     "【已生成图片】",
     imageLines || "暂无",
     "",
-    "输出格式要求：用 Markdown；标题、正文、发布建议分清楚；内容尽量完整，少写解释过程。",
+    "输出格式要求：纯文本，可直接复制到小红书发布框；第一行直接写新标题，空行后写正文；不要写“标题：”“正文：”“封面文案建议：”“话题标签：”等栏目名；不要使用 Markdown，不要写 #、```、*、- 这类格式符号，不要输出标题层级标记；用自然段和空行区分内容即可。",
   ].join("\n");
 }
 
@@ -299,7 +329,7 @@ module.exports = async function handler(req, res) {
       messages: [
         {
           role: "system",
-          content: "你是资深中文内容策略和社媒编辑，擅长把原始笔记素材重构为更强的多平台可发布草稿。你必须重写标题和正文结构，不能复刻原文、账号、品牌露出或错误日期。",
+          content: "你是资深中文内容策略和社媒编辑，擅长把原始笔记素材重构为更强的多平台可发布草稿。你必须重写标题和正文结构，不能复刻原文、账号、品牌露出或错误日期。输出必须是纯文本，不要输出 Markdown、标题层级、列表符号或 # 号。",
         },
         { role: "user", content: prompt },
       ],
@@ -321,7 +351,7 @@ module.exports = async function handler(req, res) {
     } catch {
       payload = { raw_text: responseText };
     }
-    const content = extractResponseText(payload);
+    const content = sanitizePlainText(extractResponseText(payload));
     const usage = tokenUsage(payload);
     const logWarning = await writeApiLog(client, {
       traceId: `web:social-draft:${Date.now()}`,
@@ -344,7 +374,7 @@ module.exports = async function handler(req, res) {
       errorMessage: modelRes.ok ? "" : String(payload?.error?.message || payload?.message || responseText).slice(0, 500),
       rawUsage: usage.raw,
       metadata: {
-        source: "web_image_generation_workflow",
+        source: "web_social_generation_workflow",
         platform,
         platform_label: platformConfigs[platform].label,
         model,
@@ -390,7 +420,7 @@ module.exports = async function handler(req, res) {
         errorCode: "request_exception",
         errorMessage: error.message,
         rawUsage: {},
-        metadata: { source: "web_image_generation_workflow" },
+        metadata: { source: "web_social_generation_workflow" },
       });
     }
     sendJson(res, error.statusCode || 500, { ok: false, error: error.message || "社媒内容生成失败" });

@@ -41,6 +41,28 @@ function cleanText(value, max = 4000) {
   return String(value || "").trim().slice(0, max);
 }
 
+function sanitizeDraftContent(value) {
+  return cleanText(value, 20000)
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => {
+      let text = String(line || "").trim();
+      if (/^(话题标签|标签|hashtags?)[:：]/i.test(text)) return "";
+      text = text.replace(/^(标题|正文|封面文案建议|评论区引导|小红书文案|新标题)[:：]\s*/g, "");
+      text = text.replace(/^#{1,6}\s*/g, "");
+      text = text.replace(/^[-*•]\s+/g, "");
+      text = text.replace(/^\d+[.)]\s+/g, "");
+      text = text.replace(/\*\*(.*?)\*\*/g, "$1");
+      text = text.replace(/__(.*?)__/g, "$1");
+      text = text.replace(/[`*_]/g, "");
+      text = text.replace(/#/g, "");
+      return text.trimEnd();
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function safePathPart(value, fallback = "未命名") {
   const cleaned = cleanText(value, 80)
     .replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ")
@@ -56,12 +78,21 @@ function datePrefix(value) {
 }
 
 function markdownFor(input, platformLabel) {
+  const sourceImages = Array.isArray(input.sourceImages)
+    ? input.sourceImages.slice(0, MAX_DRAFT_IMAGES).map((image, index) => {
+        const label = sourceImageLabel(image, index);
+        return [label, cleanText(image?.url || image, 4000), cleanText(image?.source, 160)];
+      })
+    : [];
   const imageRows = Array.isArray(input.images)
     ? input.images.slice(0, MAX_DRAFT_IMAGES).map((image, index) => {
         const label = imageVersionLabel(image, index);
         const instruction = cleanText(image?.editInstruction, 1200);
         return [`- ${label}: images/${imageFileStem(image, index)}`, instruction ? `  - 改图要求：${instruction}` : ""].filter(Boolean).join("\n");
       })
+    : [];
+  const sourceImageRows = sourceImages.length
+    ? sourceImages.map(([label, , source]) => `- ${label}: source-images/${sourceImageFileStem(label)}.*${source ? `\n  - 来源：${source}` : ""}`).join("\n")
     : [];
   return [
     `# ${cleanText(input.title, 200) || "社媒草稿"}`,
@@ -72,7 +103,11 @@ function markdownFor(input, platformLabel) {
     "",
     "## 生成社媒内容",
     "",
-    cleanText(input.socialContent, 20000) || "暂无",
+    sanitizeDraftContent(input.socialContent) || "暂无",
+    "",
+    "## 原笔记图片",
+    "",
+    sourceImageRows.length ? sourceImageRows : "暂无",
     "",
     "## 原始笔记标题",
     "",
@@ -109,12 +144,23 @@ function markdownFor(input, platformLabel) {
   ].join("\n");
 }
 
+function sourceImageFileStem(label) {
+  return safePathPart(String(label || "原笔记图").replace(/\s+/g, " ").trim() || "原笔记图", "原笔记图");
+}
+
 function imageFileStem(image, index) {
   const slot = Number(image?.slot || 0);
   const version = Number(image?.version || 0);
   if (slot > 0 && version > 0) return `slot-${slot}-v${version}`;
   if (slot > 0) return `slot-${slot}-v1`;
   return `image-${index + 1}`;
+}
+
+function sourceImageLabel(image, index) {
+  const slot = Number(image?.slot || 0);
+  if (cleanText(image?.label, 120)) return cleanText(image.label, 120);
+  if (slot > 0) return `原笔记图 ${slot}`;
+  return `原笔记图 ${index + 1}`;
 }
 
 function imageVersionLabel(image, index) {
@@ -270,11 +316,11 @@ module.exports = async function handler(req, res) {
     const folder = `社媒草稿仓库/${platformLabel}/${datePrefix(input.producedAt)}_${title}`;
     const entries = [
       { name: `${folder}/社媒草稿.md`, data: markdownFor(input, platformLabel) },
-      {
-        name: `${folder}/素材字段.json`,
-        data: JSON.stringify(
-          {
-            platform,
+        {
+          name: `${folder}/素材字段.json`,
+          data: JSON.stringify(
+            {
+              platform,
             platformLabel,
             noteId: cleanText(input.noteId, 120),
             title: cleanText(input.title, 1000),
@@ -282,13 +328,22 @@ module.exports = async function handler(req, res) {
             targetPersona: cleanText(input.targetPersona, 4000),
             userPain: cleanText(input.userPain, 5000),
             businessLogic: cleanText(input.businessLogic, 5000),
-            businessKnowledge: cleanText(input.businessKnowledge, 6000),
-            imagePrompt: cleanText(input.imagePrompt, MAX_IMAGE_PROMPT_CHARS),
-            socialContent: cleanText(input.socialContent, 20000),
-            images: Array.isArray(input.images)
-              ? input.images.slice(0, MAX_DRAFT_IMAGES).map((image, index) => ({
-                  slot: Number(image?.slot || 0) || null,
-                  version: Number(image?.version || 0) || null,
+              businessKnowledge: cleanText(input.businessKnowledge, 6000),
+              imagePrompt: cleanText(input.imagePrompt, MAX_IMAGE_PROMPT_CHARS),
+              socialContent: sanitizeDraftContent(input.socialContent),
+              sourceImages: Array.isArray(input.sourceImages)
+                ? input.sourceImages.slice(0, MAX_DRAFT_IMAGES).map((image, index) => ({
+                    slot: Number(image?.slot || 0) || null,
+                    label: sourceImageLabel(image, index),
+                    filenameStem: sourceImageFileStem(sourceImageLabel(image, index)),
+                    url: cleanText(image?.url || image, 4000),
+                    source: cleanText(image?.source, 160),
+                  }))
+                : [],
+              images: Array.isArray(input.images)
+                ? input.images.slice(0, MAX_DRAFT_IMAGES).map((image, index) => ({
+                    slot: Number(image?.slot || 0) || null,
+                    version: Number(image?.version || 0) || null,
                   label: imageVersionLabel(image, index),
                   filenameStem: imageFileStem(image, index),
                   url: cleanText(image?.url || image, 4000),
@@ -301,12 +356,27 @@ module.exports = async function handler(req, res) {
           },
           null,
           2,
-        ),
-      },
-    ];
+          ),
+        },
+      ];
 
+    const sourceImageLinks = [];
     const imageLinks = [];
+    const sourceImages = Array.isArray(input.sourceImages) ? input.sourceImages.slice(0, MAX_DRAFT_IMAGES) : [];
     const images = Array.isArray(input.images) ? input.images.slice(0, MAX_DRAFT_IMAGES) : [];
+    for (let index = 0; index < sourceImages.length; index += 1) {
+      const url = cleanText(sourceImages[index]?.url || sourceImages[index], 4000);
+      if (!url) continue;
+      const label = sourceImageLabel(sourceImages[index], index);
+      const stem = sourceImageFileStem(label);
+      sourceImageLinks.push(`${label} (${stem}): ${url}`);
+      try {
+        const image = await fetchImage(url);
+        entries.push({ name: `${folder}/source-images/${stem}.${image.extension}`, data: image.data });
+      } catch (error) {
+        sourceImageLinks.push(`${label} (${stem}) 下载失败：${error.message}`);
+      }
+    }
     for (let index = 0; index < images.length; index += 1) {
       const url = cleanText(images[index]?.url || images[index], 4000);
       if (!url) continue;
@@ -320,6 +390,7 @@ module.exports = async function handler(req, res) {
         imageLinks.push(`${label} (${stem}) 下载失败：${error.message}`);
       }
     }
+    if (sourceImageLinks.length) entries.push({ name: `${folder}/source-image-links.txt`, data: `${sourceImageLinks.join("\n")}\n` });
     entries.push({ name: `${folder}/image-links.txt`, data: `${imageLinks.join("\n")}\n` });
 
     const zip = createZip(entries);
