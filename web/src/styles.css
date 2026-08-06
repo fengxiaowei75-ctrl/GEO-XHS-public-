@@ -2754,10 +2754,12 @@ tbody tr:hover {
 }
 
 .image-result-slot {
+  position: relative;
   display: block;
   width: 100%;
   min-width: 0;
   aspect-ratio: 1 / 1;
+  padding: 0;
   overflow: hidden;
   border: 1px dashed #d6ded5;
   border-radius: 8px;
@@ -4070,6 +4072,25 @@ tbody tr:hover {
   height: 100%;
   object-fit: contain;
   background: #fff;
+}
+
+.draft-review-thumb-button .image-version-badge {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  height: auto;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(16, 27, 24, 0.76);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 850;
+  line-height: 1.2;
 }
 
 .draft-review-empty {
