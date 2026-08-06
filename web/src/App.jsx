@@ -2494,6 +2494,11 @@ const genericIndustryTerms = new Set([
 ]);
 
 const fixedRewriteSteps = ["读取笔记资产", "创建生图任务", "轮询图片结果", "生成小红书文案", "洗稿完成"];
+const fixedImageSizeOptions = [
+  { value: "1024x1536", label: "小红书竖图 1024x1536" },
+  { value: "1024x1024", label: "小红书方图 1024x1024" },
+  { value: "1536x1024", label: "横图 1536x1024" },
+];
 
 function uniqueTextItems(items) {
   return Array.from(new Set(items.map((item) => String(item || "").trim()).filter(Boolean)));
@@ -2651,6 +2656,7 @@ function FixedContentFlow({ data }) {
   const [loadingNoteDetail, setLoadingNoteDetail] = useState(false);
   const [detailMessage, setDetailMessage] = useState("");
   const [running, setRunning] = useState(false);
+  const [fixedSize, setFixedSize] = useState("1024x1536");
   const [savingDraft, setSavingDraft] = useState(false);
   const [progress, setProgress] = useState({ status: "idle", activeStep: 0, message: "选择一条候选笔记后开始洗稿" });
   const [runningImageResult, setRunningImageResult] = useState(null);
@@ -2745,14 +2751,14 @@ function FixedContentFlow({ data }) {
     try {
       updateProgress(0, "读取笔记详情、内容资产字段和原图提示词");
       const detail = await ensureNoteDetail(selectedNote.note_id);
-      const form = imageWorkflowFormFromNote(detail || {}, emptyImageWorkflowForm);
+      const form = { ...imageWorkflowFormFromNote(detail || {}, emptyImageWorkflowForm), size: fixedSize };
       if (!form.noteId) throw new Error("没有读取到可用笔记资产");
       if (!hasWorkflowPrompt(form)) throw new Error("该笔记缺少可用生图提示词，需要先完成图片解析/内容资产沉淀");
 
       const startedAt = Date.now();
       const imageCount = normalizeWorkflowImageCount(form.imageCount);
       const imagePrompts = normalizeWorkflowImagePrompts(form.imagePrompts).slice(0, imageCount);
-      updateProgress(1, "创建 Duomi 生图任务");
+      updateProgress(1, `创建 Duomi 生图任务（${fixedSize}）`);
       const payload = await requestJson("/api/image-generate", {
         method: "POST",
         body: JSON.stringify({
@@ -3083,6 +3089,9 @@ function FixedContentFlow({ data }) {
               <div className="fixed-original-images">
                 <div className="fixed-subhead">
                   <strong>原笔记图片</strong>
+                </div>
+                <div className="fixed-generation-options">
+                  <SelectControl value={fixedSize} onChange={setFixedSize} label="尺寸" options={fixedImageSizeOptions} />
                 </div>
                 {sourceImages.length ? (
                   <div className="fixed-source-image-grid">

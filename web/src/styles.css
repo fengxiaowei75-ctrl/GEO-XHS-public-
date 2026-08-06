@@ -3345,6 +3345,13 @@ tbody tr:hover {
   background: #fbfcfa;
 }
 
+.fixed-generation-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0 12px;
+}
+
 .fixed-original-images small {
   display: block;
   margin-top: 8px;
