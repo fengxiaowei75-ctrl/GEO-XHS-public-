@@ -3606,7 +3606,7 @@ function FixedContentFlow({ data }) {
   );
 }
 
-function DraftReviewFlow({ data }) {
+function DraftReviewFlow({ data, onNavigate }) {
   const initialDrafts = useMemo(() => readReviewDrafts(), []);
   const [drafts, setDrafts] = useState(initialDrafts);
   const [selectedReviewId, setSelectedReviewId] = useState(() => initialDrafts[0]?.reviewId || "");
@@ -3623,6 +3623,7 @@ function DraftReviewFlow({ data }) {
   const [editInstruction, setEditInstruction] = useState("");
   const [editImageCount, setEditImageCount] = useState("1");
   const [editingImage, setEditingImage] = useState(false);
+  const emptyDraftHint = "当前没有待审核草稿。先跑一次固定内容流或爆文洗稿流，历史会自动出现在这里。";
 
   useEffect(() => {
     function syncDrafts() {
@@ -3648,12 +3649,19 @@ function DraftReviewFlow({ data }) {
 
   const selectedDraft = drafts.find((item) => item.reviewId === selectedReviewId) || drafts[0] || null;
   const selectedNoteId = draftItemNoteId(selectedDraft);
-  const selectedTitle = draftItemTitle(selectedDraft);
+  const selectedTitle = selectedDraft ? draftItemTitle(selectedDraft) : "暂无待审核草稿";
   const selectedSocialContent = draftItemSocialContent(selectedDraft);
   const generatedImages = draftItemImages(selectedDraft);
   const sourceImages = noteDetail?.source_images?.length ? sourceImagesForNote(noteDetail) : draftItemSourceImages(selectedDraft);
   const originalContent = sanitizeXhsDraftContent(noteDetail?.content || selectedDraft?.form?.content || "");
   const selectedMetrics = noteDetail || selectedDraft || {};
+  const selectedDraftForm = selectedDraft?.form || {};
+  const selectedDraftSocialDraft = selectedDraft?.socialDraft || null;
+  const progressMessage = !drafts.length && progress.status === "idle" ? emptyDraftHint : progress.message;
+
+  function navigateTo(view) {
+    if (typeof onNavigate === "function") onNavigate(view);
+  }
 
   useEffect(() => {
     if (!selectedNoteId) {
@@ -3731,15 +3739,15 @@ function DraftReviewFlow({ data }) {
       const payload = await requestJson("/api/social-generate", {
         method: "POST",
         body: JSON.stringify({
-          platform: selectedDraft.socialPlatform || "xhs",
+          platform: selectedDraft?.socialPlatform || "xhs",
           noteId: selectedNoteId,
-          title: noteDetail?.title || selectedDraft.form?.title || "",
-          content: noteDetail?.content || selectedDraft.form?.content || "",
-          targetPersona: noteDetail?.primary_target_persona || selectedDraft.form?.targetPersona || "",
-          userPain: noteDetail?.true_pain_label || selectedDraft.form?.userPain || "",
-          businessLogic: noteDetail?.business_logic || selectedDraft.form?.businessLogic || "",
-          businessKnowledge: noteDetail?.business_knowledge || selectedDraft.form?.businessKnowledge || "",
-          imagePrompt: promptPayloadForSave(selectedDraft.form || emptyImageWorkflowForm),
+          title: noteDetail?.title || selectedDraftForm.title || "",
+          content: noteDetail?.content || selectedDraftForm.content || "",
+          targetPersona: noteDetail?.primary_target_persona || selectedDraftForm.targetPersona || "",
+          userPain: noteDetail?.true_pain_label || selectedDraftForm.userPain || "",
+          businessLogic: noteDetail?.business_logic || selectedDraftForm.businessLogic || "",
+          businessKnowledge: noteDetail?.business_knowledge || selectedDraftForm.businessKnowledge || "",
+          imagePrompt: promptPayloadForSave(selectedDraftForm || emptyImageWorkflowForm),
           images: generatedImages,
           workflowAction: selectedSocialContent ? "social_edit" : "social_generate",
           currentSocialContent: selectedSocialContent,
@@ -3749,9 +3757,9 @@ function DraftReviewFlow({ data }) {
 
       persistDraft({
         ...selectedDraft,
-        socialPlatform: payload.platform || selectedDraft.socialPlatform || "xhs",
+        socialPlatform: payload.platform || selectedDraft?.socialPlatform || "xhs",
         socialDraft: {
-          platform: payload.platform || selectedDraft.socialPlatform || "xhs",
+          platform: payload.platform || selectedDraft?.socialPlatform || "xhs",
           platformLabel: payload.platformLabel || socialPlatformLabels[payload.platform] || "小红书",
           content: sanitizeXhsDraftContent(payload.content),
           model: payload.model || "",
@@ -3789,7 +3797,7 @@ function DraftReviewFlow({ data }) {
     }
 
     const startedAt = Date.now();
-    const originalPrompt = imagePromptAt(selectedDraft.form || emptyImageWorkflowForm, slot) || selectedDraft.form?.imagePrompt || "";
+    const originalPrompt = imagePromptAt(selectedDraftForm || emptyImageWorkflowForm, slot) || selectedDraftForm.imagePrompt || "";
     const editPrompts = Array.from({ length: editCount }, (_, index) => ({
       slot: index + 1,
       prompt: buildImageEditPrompt({ slot, originalPrompt, instruction, branchIndex: index + 1, branchTotal: editCount }),
@@ -3801,19 +3809,19 @@ function DraftReviewFlow({ data }) {
         method: "POST",
         body: JSON.stringify({
           noteId: selectedNoteId,
-          title: selectedDraft.form?.title || noteDetail?.title || "",
-          content: selectedDraft.form?.content || noteDetail?.content || "",
-          targetPersona: selectedDraft.form?.targetPersona || noteDetail?.primary_target_persona || "",
-          userPain: selectedDraft.form?.userPain || noteDetail?.true_pain_label || "",
-          businessLogic: selectedDraft.form?.businessLogic || noteDetail?.business_logic || "",
-          businessKnowledge: selectedDraft.form?.businessKnowledge || noteDetail?.business_knowledge || "",
+          title: selectedDraftForm.title || noteDetail?.title || "",
+          content: selectedDraftForm.content || noteDetail?.content || "",
+          targetPersona: selectedDraftForm.targetPersona || noteDetail?.primary_target_persona || "",
+          userPain: selectedDraftForm.userPain || noteDetail?.true_pain_label || "",
+          businessLogic: selectedDraftForm.businessLogic || noteDetail?.business_logic || "",
+          businessKnowledge: selectedDraftForm.businessKnowledge || noteDetail?.business_knowledge || "",
           imagePrompt: editPrompts.map((item) => item.prompt).join("\n\n"),
           imagePrompts: editPrompts,
           unifiedVisualStyle: false,
           referenceImage: sourceImage.url,
           workflowAction: "image_edit",
           editSlot: slot,
-          size: selectedDraft.form?.size || "1024x1536",
+          size: selectedDraftForm.size || "1024x1536",
           imageCount: editCount,
         }),
       });
@@ -3872,8 +3880,15 @@ function DraftReviewFlow({ data }) {
   }
 
   async function copyDraftContent() {
+    if (!selectedDraft) {
+      setProgress({ status: "failed", activeStep: 0, message: "当前没有可复制的待审核草稿" });
+      return;
+    }
     const content = selectedSocialContent;
-    if (!content) return;
+    if (!content) {
+      setProgress({ status: "failed", activeStep: 3, message: "当前草稿还没有可复制的小红书文案" });
+      return;
+    }
     try {
       await navigator.clipboard?.writeText(content);
       updateProgress(3, "小红书文案已复制", "done");
@@ -3883,7 +3898,10 @@ function DraftReviewFlow({ data }) {
   }
 
   async function downloadDraftPackage() {
-    if (!selectedDraft) return;
+    if (!selectedDraft) {
+      updateProgress(3, "当前没有可下载的待审核草稿", "failed");
+      return;
+    }
     setSavingDraft(true);
     try {
       const response = await fetch("/api/draft-package", {
@@ -3913,66 +3931,83 @@ function DraftReviewFlow({ data }) {
     }
   }
 
-  if (!selectedDraft) {
-    return (
-      <section className="draft-review-flow">
-        <section className="panel draft-review-empty-panel">
-          <SectionHeader icon={ListChecks} title="待审核草稿" action={<StatusPill tone="neutral">0条</StatusPill>} />
-          <div className="fixed-content-empty">
-            <Layers3 size={28} />
-            <strong>暂无待审核草稿</strong>
-            <span>先跑一次固定内容流或爆文洗稿流，历史会自动进这里</span>
-          </div>
-        </section>
-      </section>
-    );
-  }
-
   return (
     <section className="draft-review-flow">
       <section className="panel draft-review-strip-panel">
-        <SectionHeader icon={ListChecks} title="待审核草稿" action={<StatusPill tone="neutral">{formatNumber(drafts.length)}条</StatusPill>} />
-        <div className="draft-review-strip">
-          {drafts.map((item) => {
-            const images = draftItemImages(item);
-            const socialContent = draftItemSocialContent(item);
-            const active = selectedDraft.reviewId === item.reviewId;
-            return (
-              <button
-                key={item.reviewId}
-                className={`draft-review-card ${active ? "active" : ""}`}
-                type="button"
-                onClick={() => setSelectedReviewId(item.reviewId)}
-              >
-                <div className="draft-review-card-head">
-                  <div>
-                    <span>{item.sourceLabel || "待审核草稿"}</span>
-                    <strong>{draftItemTitle(item)}</strong>
-                    <p>{item.lineShortTitle || item.lineTitle || draftItemNoteId(item) || "-"}</p>
-                  </div>
-                  <StatusPill tone={socialContent ? "green" : "amber"}>{socialContent ? "可审阅" : "待生成"}</StatusPill>
-                </div>
-                <div className="draft-review-thumb-row">
-                  {images.length ? (
-                    images.map((image) => (
-                      <span key={`${item.reviewId}-${image.slot}-${image.version}`} className="draft-review-thumb">
-                        <img src={image.url} alt={`草稿图 ${image.slot}-${image.version}`} />
-                        <em>{imageVersionBadge(image)}</em>
-                      </span>
-                    ))
-                  ) : (
-                    <div className="draft-review-thumb-empty">暂无图片</div>
-                  )}
-                </div>
-                <p className="draft-review-card-preview">{socialContent ? textPreview(socialContent, 110) : "暂无小红书文案"}</p>
-                <div className="draft-review-card-meta">
-                  <span>{formatDateTimeSecond(item.updatedAt || item.createdAt)}</span>
-                  <span>{formatNumber(images.length)} 张图</span>
-                </div>
+        <SectionHeader
+          icon={ListChecks}
+          title="待审核草稿"
+          action={
+            <div className="header-actions">
+              <button className="copy-button" type="button" onClick={() => navigateTo("fixedContent")}>
+                返回固定内容流
               </button>
-            );
-          })}
-        </div>
+              <button className="copy-button" type="button" onClick={() => navigateTo("imageGen")}>
+                返回爆文洗稿流
+              </button>
+              <StatusPill tone="neutral">{formatNumber(drafts.length)}条</StatusPill>
+            </div>
+          }
+        />
+        {drafts.length ? (
+          <div className="draft-review-strip">
+            {drafts.map((item) => {
+              const images = draftItemImages(item);
+              const socialContent = draftItemSocialContent(item);
+              const active = selectedDraft?.reviewId === item.reviewId;
+              return (
+                <button
+                  key={item.reviewId}
+                  className={`draft-review-card ${active ? "active" : ""}`}
+                  type="button"
+                  onClick={() => setSelectedReviewId(item.reviewId)}
+                >
+                  <div className="draft-review-card-head">
+                    <div>
+                      <span>{item.sourceLabel || "待审核草稿"}</span>
+                      <strong>{draftItemTitle(item)}</strong>
+                      <p>{item.lineShortTitle || item.lineTitle || draftItemNoteId(item) || "-"}</p>
+                    </div>
+                    <StatusPill tone={socialContent ? "green" : "amber"}>{socialContent ? "可审阅" : "待生成"}</StatusPill>
+                  </div>
+                  <div className="draft-review-thumb-row">
+                    {images.length ? (
+                      images.map((image) => (
+                        <span key={`${item.reviewId}-${image.slot}-${image.version}`} className="draft-review-thumb">
+                          <img src={image.url} alt={`草稿图 ${image.slot}-${image.version}`} />
+                          <em>{imageVersionBadge(image)}</em>
+                        </span>
+                      ))
+                    ) : (
+                      <div className="draft-review-thumb-empty">暂无图片</div>
+                    )}
+                  </div>
+                  <p className="draft-review-card-preview">{socialContent ? textPreview(socialContent, 110) : "暂无小红书文案"}</p>
+                  <div className="draft-review-card-meta">
+                    <span>{formatDateTimeSecond(item.updatedAt || item.createdAt)}</span>
+                    <span>{formatNumber(images.length)} 张图</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="draft-review-empty-shell">
+            <div className="draft-review-empty-copy">
+              <Layers3 size={28} />
+              <strong>暂无待审核草稿</strong>
+              <span>先跑一次固定内容流或爆文洗稿流，历史会自动进这里。</span>
+            </div>
+            <div className="draft-review-empty-actions">
+              <button className="copy-button" type="button" onClick={() => navigateTo("fixedContent")}>
+                去固定内容流
+              </button>
+              <button className="copy-button" type="button" onClick={() => navigateTo("imageGen")}>
+                去爆文洗稿流
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="panel draft-review-progress-panel">
@@ -3984,24 +4019,28 @@ function DraftReviewFlow({ data }) {
             </span>
           ))}
         </div>
-        <div className={`fixed-progress-message ${progress.status === "failed" ? "failed" : ""}`}>{progress.message}</div>
+        <div className={`fixed-progress-message ${progress.status === "failed" ? "failed" : ""}`}>{progressMessage}</div>
       </section>
 
       <section className="draft-review-grid">
         <section className="panel draft-review-original-panel">
-          <SectionHeader icon={FileText} title="原红书内容" action={<StatusPill tone="blue">{draftItemSourceLabel(selectedDraft)}</StatusPill>} />
+          <SectionHeader
+            icon={FileText}
+            title="原红书内容"
+            action={<StatusPill tone={selectedDraft ? "blue" : "neutral"}>{selectedDraft ? draftItemSourceLabel(selectedDraft) : "等待草稿"}</StatusPill>}
+          />
           <div className="draft-review-head">
             <div>
               <strong>{selectedTitle}</strong>
               <span>
-                {selectedNoteId || "-"} · {noteDetail?.author_nickname || selectedDraft.authorNickname || "-"} · {formatDateTimeSecond(noteDetail?.note_date || selectedDraft.noteDate || selectedDraft.createdAt)}
+                {selectedNoteId || "-"} · {noteDetail?.author_nickname || selectedDraft?.authorNickname || "-"} · {formatDateTimeSecond(noteDetail?.note_date || selectedDraft?.noteDate || selectedDraft?.createdAt)}
               </span>
             </div>
             <div className="header-actions">
-              <button className="copy-button" type="button" onClick={copyDraftContent}>
+              <button className="copy-button" type="button" onClick={copyDraftContent} disabled={!selectedDraft || !selectedSocialContent}>
                 复制文案
               </button>
-              <button className="primary-button" type="button" onClick={downloadDraftPackage} disabled={savingDraft}>
+              <button className="primary-button" type="button" onClick={downloadDraftPackage} disabled={savingDraft || !selectedDraft}>
                 <Save size={15} />
                 {savingDraft ? "下载中" : "下载内容包"}
               </button>
@@ -4040,8 +4079,8 @@ function DraftReviewFlow({ data }) {
             icon={FileText}
             title="新红书文案"
             action={
-              selectedDraft.socialDraft?.model ? (
-                <StatusPill tone="green">{selectedDraft.socialDraft.model}</StatusPill>
+              selectedDraftSocialDraft?.model ? (
+                <StatusPill tone="green">{selectedDraftSocialDraft.model}</StatusPill>
               ) : (
                 <StatusPill tone={selectedSocialContent ? "green" : "amber"}>{selectedSocialContent ? "已清洗" : "待生成"}</StatusPill>
               )
@@ -4049,12 +4088,12 @@ function DraftReviewFlow({ data }) {
           />
           <div className="draft-review-head">
             <div>
-              <strong>{draftItemTitle(selectedDraft)}</strong>
+              <strong>{selectedDraft ? draftItemTitle(selectedDraft) : "等待草稿"}</strong>
               <span>
-                {selectedNoteId || "-"} · {selectedDraft.sourceLabel || "-"} · {formatDateTimeSecond(selectedDraft.updatedAt || selectedDraft.createdAt)}
+                {selectedNoteId || "-"} · {selectedDraft?.sourceLabel || "-"} · {formatDateTimeSecond(selectedDraft?.updatedAt || selectedDraft?.createdAt)}
               </span>
             </div>
-            <button className="copy-button" type="button" onClick={copyDraftContent}>
+            <button className="copy-button" type="button" onClick={copyDraftContent} disabled={!selectedDraft || !selectedSocialContent}>
               复制文案
             </button>
           </div>
@@ -4068,7 +4107,7 @@ function DraftReviewFlow({ data }) {
               rows={4}
             />
             <div className="draft-review-actions">
-              <button className="primary-button" type="button" onClick={regenerateSocialDraft} disabled={editingSocial}>
+              <button className="primary-button" type="button" onClick={regenerateSocialDraft} disabled={editingSocial || !selectedDraft}>
                 <Sparkles size={15} />
                 {editingSocial ? "改文案中" : selectedSocialContent ? "改文案" : "生成文案"}
               </button>
@@ -4079,23 +4118,27 @@ function DraftReviewFlow({ data }) {
 
         <section className="panel draft-review-image-panel">
           <SectionHeader icon={ImagePlus} title="洗稿图片" action={<StatusPill tone="neutral">{formatNumber(generatedImages.length)} 张</StatusPill>} />
-          <div className="draft-review-image-grid">
-            {generatedImages.map((item) => (
-              <div className="draft-review-image-card" key={item.key}>
-                <button type="button" className="draft-review-thumb-button" onClick={() => setPreviewImage(item.image)} disabled={!item.image?.url}>
-                  <img src={item.image.url} alt={`洗稿图片 ${item.slot} ${item.image.version || 1}`} />
-                  <span className="image-version-badge">{imageVersionBadge(item.image)}</span>
-                </button>
-                <div className="image-slot-actions">
-                  <button className="copy-button" type="button" onClick={() => openImageEdit(item.slot, item.image)} disabled={editingImage}>
-                    <PencilLine size={14} />
-                    改图
+          {generatedImages.length ? (
+            <div className="draft-review-image-grid">
+              {generatedImages.map((item) => (
+                <div className="draft-review-image-card" key={item.key}>
+                  <button type="button" className="draft-review-thumb-button" onClick={() => setPreviewImage(item.image)} disabled={!item.image?.url}>
+                    <img src={item.image.url} alt={`洗稿图片 ${item.slot} ${item.image.version || 1}`} />
+                    <span className="image-version-badge">{imageVersionBadge(item.image)}</span>
                   </button>
-                  <span>{item.isLatest ? "最新版本" : "历史版本"}</span>
+                  <div className="image-slot-actions">
+                    <button className="copy-button" type="button" onClick={() => openImageEdit(item.slot, item.image)} disabled={editingImage}>
+                      <PencilLine size={14} />
+                      改图
+                    </button>
+                    <span>{item.isLatest ? "最新版本" : "历史版本"}</span>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <div className="draft-review-empty">暂无图片结果，生成后会横向列在这里</div>
+          )}
           {editingSlot ? (
             <form className="image-edit-panel" onSubmit={editDraftImage}>
               <div className="image-edit-head">
@@ -6320,7 +6363,7 @@ export default function App() {
             </div>
           ) : null}
           {activeView === "fixedContent" ? <FixedContentFlow data={data} /> : null}
-          {activeView === "draftReview" ? <DraftReviewFlow data={data} /> : null}
+          {activeView === "draftReview" ? <DraftReviewFlow data={data} onNavigate={setActiveView} /> : null}
           {activeView === "ops" ? <OpsDashboard data={data} apiDate={apiDate} onApiDateChange={handleApiDateChange} /> : null}
           {activeView === "models" ? <ModelConfigView data={data} /> : null}
           {activeView === "admin" ? <AdminConfigView currentUser={currentUser} permissionCatalog={permissionCatalog} /> : null}
