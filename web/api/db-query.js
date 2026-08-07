@@ -44,27 +44,28 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
-function getPoolConfig() {
-  const ssl = process.env.PGSSLMODE === "require" ? { rejectUnauthorized: false } : false;
+function getReadonlyPoolConfig() {
+  const sslMode = process.env.DB_QUERY_PGSSLMODE || process.env.PGSSLMODE;
+  const ssl = sslMode === "require" ? { rejectUnauthorized: false } : false;
 
-  if (process.env.DATABASE_URL) {
+  if (process.env.DB_QUERY_DATABASE_URL) {
     return {
-      connectionString: process.env.DATABASE_URL,
+      connectionString: process.env.DB_QUERY_DATABASE_URL,
       ssl,
       max: 2,
       idleTimeoutMillis: 30000,
     };
   }
 
-  const requiredEnv = ["PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD"];
+  const requiredEnv = ["DB_QUERY_PGHOST", "DB_QUERY_PGDATABASE", "DB_QUERY_PGUSER", "DB_QUERY_PGPASSWORD"];
   if (!requiredEnv.every((key) => Boolean(process.env[key]))) return null;
 
   return {
-    host: process.env.PGHOST,
-    port: Number(process.env.PGPORT || 5432),
-    database: process.env.PGDATABASE,
-    user: process.env.PGUSER,
-    password: process.env.PGPASSWORD,
+    host: process.env.DB_QUERY_PGHOST,
+    port: Number(process.env.DB_QUERY_PGPORT || 5432),
+    database: process.env.DB_QUERY_PGDATABASE,
+    user: process.env.DB_QUERY_PGUSER,
+    password: process.env.DB_QUERY_PGPASSWORD,
     ssl,
     max: 2,
     idleTimeoutMillis: 30000,
@@ -72,7 +73,7 @@ function getPoolConfig() {
 }
 
 function getPool() {
-  const config = getPoolConfig();
+  const config = getReadonlyPoolConfig();
   if (!config) return null;
   if (!pool) pool = new Pool(config);
   return pool;
@@ -125,7 +126,7 @@ module.exports = async function handler(req, res) {
 
     const dbPool = getPool();
     if (!dbPool) {
-      sendJson(res, 500, { success: false, error: "服务端缺少数据库环境变量" });
+      sendJson(res, 500, { success: false, error: "服务端缺少 db-query 只读数据库环境变量" });
       return;
     }
 
