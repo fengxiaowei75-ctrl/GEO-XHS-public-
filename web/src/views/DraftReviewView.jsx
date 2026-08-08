@@ -8,10 +8,11 @@ import { SectionHeader } from "../components/layout/SectionHeader";
 import { StatusPill } from "../components/data/StatusPill";
 import { WorkflowSteps } from "../components/workflows/WorkflowSteps";
 import { useDraftReview } from "../hooks/useDraftReview";
+import { useImageGeneration } from "../hooks/useImageGeneration";
 import { requestJson } from "../hooks/useRequestJson";
 import { formatDateTimeSecond, formatNumber, textPreview } from "../utils/formatters";
 import { firstStructuredText, listItems, noteContentText, structuredText } from "../utils/collections";
-import { appendEditedImages, buildImageEditPrompt, emptyImageWorkflowForm, generatedImagesForSave, imagePromptAt, imageSlotItems, imageTaskPollDelay, imageTaskStatusLabel, imageVersionBadge, imageVersionDisplayItems, imageVersionLabel, maxImageTaskPollAttempts, maxWorkflowImages, normalizeWorkflowImageCount, promptPayloadForSave, wait, imageWorkflowHistoryUpdatedEvent, fixedContentHistoryUpdatedEvent } from "./workflowImageHelpers";
+import { appendEditedImages, buildImageEditPrompt, emptyImageWorkflowForm, generatedImagesForSave, imagePromptAt, imageSlotItems, imageTaskPollDelay, imageTaskStatusLabel, imageVersionBadge, imageVersionDisplayItems, imageVersionLabel, maxImageTaskPollAttempts, maxWorkflowImages, normalizeWorkflowImageCount, promptPayloadForSave, wait, imageWorkflowHistoryUpdatedEvent, fixedContentHistoryUpdatedEvent, socialPlatformLabels } from "./workflowImageHelpers";
 import { compactSocialDraft, draftItemImages, draftItemNoteId, draftItemSocialContent, draftItemSourceImages, draftItemSourceLabel, draftItemTitle, draftPackagePayloadFromItem, readFixedContentHistory, readReviewDrafts, readImageWorkflowHistory, sanitizeXhsDraftContent, writeReviewDraftItem, writeFixedContentHistory, writeImageWorkflowHistory } from "./workflowHistoryHelpers";
 import { NoteMetricChip, DetailTextBlock, StructuredList, TagLine, reviewDraftSteps, sourceImagesForNote } from "./workflowFixedHelpers";
 import { DraftReviewViewBody } from "../components/workflows/DraftReviewViewBody";
@@ -28,6 +29,20 @@ export function DraftReviewView({ data, onNavigate }) {
   const [socialEditInstruction, setSocialEditInstruction] = useState("");
   const [editingImage, setEditingImage] = useState(false);
   const emptyDraftHint = "当前没有待审核草稿。先跑一次固定内容流或爆文洗稿流，历史会自动出现在这里。";
+  const {
+    editingSlot,
+    editingSourceImage,
+    editInstruction,
+    editImageCount,
+    setEditInstruction,
+    setEditImageCount,
+    openImageEdit,
+    resetImageEdit,
+  } = useImageGeneration({
+    onOpen: (slot) => {
+      setProgress((current) => ({ ...current, message: `准备修改第${slot}张图` }));
+    },
+  });
 
   useEffect(() => {
     if (!drafts.length) {

@@ -14,7 +14,7 @@ import { requestJson } from "../hooks/useRequestJson";
 import { arrayText, formatDateTimeSecond, formatNumber, textPreview } from "../utils/formatters";
 import { firstStructuredText, listItems, noteContentText, structuredText } from "../utils/collections";
 import { emptyImageWorkflowForm, imagePromptSummary, imagePromptAt, imageResultGroupId, imageSlotItems, imageTaskPollDelay, imageTaskStatusLabel, imageVersionBadge, imageVersionDisplayItems, imageVersionLabel, imageWorkflowFormFromNote, maxImageTaskPollAttempts, maxWorkflowImages, normalizeWorkflowImageCount, normalizeWorkflowImagePrompts, promptPayloadForSave, wait, buildImageEditPrompt, appendEditedImages, generatedImagesForSave, hasWorkflowPrompt } from "./workflowImageHelpers";
-import { compactSocialDraft, downloadBlob, filenameFromDisposition, historyFormSnapshot, readFixedContentHistory, sanitizeXhsDraftContent, upsertFixedContentHistoryItem, writeFixedContentHistory } from "./workflowHistoryHelpers";
+import { compactImageResult, compactSocialDraft, downloadBlob, filenameFromDisposition, historyFormSnapshot, readFixedContentHistory, sanitizeXhsDraftContent, upsertFixedContentHistoryItem, writeFixedContentHistory } from "./workflowHistoryHelpers";
 import { fixedContentLineConfigs, fixedRewriteSteps, fixedImageSizeOptions, uniqueTextItems, notePersonaItems, noteKeywordText, noteMatchesPersonas, fixedLineScore, sortHotNotes, dedupeNotes, groupFixedNotes, buildFixedContentLines, sourceImagesForNote, NoteMetricChip, DetailTextBlock } from "./workflowFixedHelpers";
 export function FixedContentView({ data }) {
   const fixedRows = useMemo(() => {
