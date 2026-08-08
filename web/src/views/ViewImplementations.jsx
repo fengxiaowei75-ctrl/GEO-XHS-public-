@@ -28,8 +28,7 @@ import {
   Users,
   XCircle,
 } from "lucide-react";
-import { ReactWordcloud } from "@cp949/react-wordcloud";
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import "tippy.js/dist/tippy.css";
 import { ChatWidget } from "../components/ChatWidget";
 import { ApiStatusComboChart } from "../components/charts/ApiStatusComboChart";
@@ -88,6 +87,12 @@ import {
 } from "../utils/dates";
 import { firstStructuredText, latestEndataSnapshot, listItems, noteContentText, structuredText } from "../utils/collections";
 import { canAccess, firstAllowedView } from "../utils/validators";
+
+const ReactWordcloud = lazy(() =>
+  import("@cp949/react-wordcloud").then((module) => ({
+    default: module.default || module.ReactWordcloud,
+  })),
+);
 
 function EndataCompactPanel({ endata }) {
   const snapshots = endata?.latestSnapshots || [];
@@ -4220,7 +4225,9 @@ function WordCloudBox({ title, caption, terms, tone, loading }) {
       {terms.length ? (
         <>
           <div className="word-cloud-render">
-            <ReactWordcloud callbacks={callbacks} maxWords={48} minSize={[300, 188]} options={options} words={terms} />
+            <Suspense fallback={<div className="empty-state word-cloud-empty">词云加载中...</div>}>
+              <ReactWordcloud callbacks={callbacks} maxWords={48} minSize={[300, 188]} options={options} words={terms} />
+            </Suspense>
           </div>
           <div className="word-cloud-top-terms">
             {topTerms.map((item, index) => (
