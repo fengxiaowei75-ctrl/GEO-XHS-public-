@@ -13,6 +13,17 @@ npm run preview -- --port 5175
 
 本地普通 Vite 预览不会运行 Vercel `/api/dashboard`，页面会自动切到样例数据。使用真实数据库时走 Vercel Serverless API。
 
+## E2E
+
+```bash
+cd web
+npm ci
+npx playwright install chromium
+npm run test:e2e
+```
+
+E2E 测试会 mock 登录接口，并让 `/api/dashboard` 走现有样例数据兜底；本地不需要生产数据库密钥。
+
 Docker 本地入口：
 
 ```bash

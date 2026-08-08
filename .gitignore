@@ -11,5 +11,7 @@ server/secrets/*.decrypted
 .vercel/
 *.log
 logs/
+test-results/
+playwright-report/
 __pycache__/
 .DS_Store
