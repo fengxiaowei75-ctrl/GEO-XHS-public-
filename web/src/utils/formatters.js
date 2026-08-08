@@ -12,14 +12,19 @@ const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
   hour: "2-digit",
   minute: "2-digit",
 });
+
 export function formatNumber(value) {
   if (value === null || value === undefined || value === "") return "-";
-  return numberFormatter.format(Number(value));
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  return numberFormatter.format(number);
 }
 
 export function formatCompact(value) {
   if (value === null || value === undefined || value === "") return "-";
-  return compactFormatter.format(Number(value));
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  return compactFormatter.format(number);
 }
 
 export function formatMoney(value) {
