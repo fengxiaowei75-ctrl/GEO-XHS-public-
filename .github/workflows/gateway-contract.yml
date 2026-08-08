@@ -1,4 +1,4 @@
-name: Gateway Contract
+name: CI Gateway Contract
 on:
   push:
     branches: [main]
@@ -13,4 +13,5 @@ jobs:
           node-version: 20
       - name: Check gateway manifest
         run: node scripts/check-gateway-contract.mjs .
-
+      - name: Check serverless API syntax
+        run: find web/api -name '*.js' -print0 | xargs -0 -n1 node --check

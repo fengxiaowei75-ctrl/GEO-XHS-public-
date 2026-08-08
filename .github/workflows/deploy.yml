@@ -17,6 +17,11 @@ jobs:
         with:
           node-version: 22
 
+      - name: 网关契约和 API 语法检查
+        run: |
+          node scripts/check-gateway-contract.mjs .
+          find web/api -name '*.js' -print0 | xargs -0 -n1 node --check
+
       - name: 安装前端依赖并构建
         run: |
           cd web
