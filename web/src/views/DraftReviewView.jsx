@@ -1,1 +1,1 @@
-export { DraftReviewView } from "./ViewImplementations";
+export { DraftReviewView } from "./workflowViews";

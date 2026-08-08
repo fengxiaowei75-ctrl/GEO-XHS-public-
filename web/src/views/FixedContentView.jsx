@@ -1,1 +1,1 @@
-export { FixedContentView } from "./ViewImplementations";
+export { FixedContentView } from "./workflowViews";

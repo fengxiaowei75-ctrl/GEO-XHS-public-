@@ -1,1 +1,1 @@
-export { ImageGenView } from "./ViewImplementations";
+export { ImageGenView } from "./workflowViews";
