@@ -6,6 +6,8 @@
 /opt/xhs-sync/scripts/GEO
 ```
 
+当前只维护 GEO 主链路；`server/scripts/麦富迪/` 作为历史保留目录，已暂停，不进入当前自动化链路。
+
 ## Active Services
 
 Service 文件备份在：

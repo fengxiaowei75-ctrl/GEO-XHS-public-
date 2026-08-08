@@ -10,6 +10,24 @@ docs/      可选：数据库字段、内容逻辑、Agent skill、分析文档
 
 生产数据通过同一个 PostgreSQL 数据库 `xhs_geo` 和 pgvector 表交换。Vercel 不运行抓取、图片解析、内容资产总结、向量刷新等后台任务；云服务器也不负责提供网站 UI。
 
+## 收口状态
+
+- `web/` 走 GitHub -> Vercel，负责前台和 Serverless API。
+- `server/scripts/GEO/` 是 GEO 主链路，线上运行目录是 `/opt/xhs-sync/scripts/GEO`。
+- `server/scripts/麦富迪/` 保留但已暂停，`xhs-realtime.service` 不再作为自动入口。
+- GitHub Actions 当前只负责更新服务器上的部署镜像，不会自动替换 GEO 线上运行目录；GEO 线上脚本变更仍要同步到 `/opt/xhs-sync/scripts/GEO` 并重启受影响服务。
+
+## 数据库账号分层
+
+数据库权限按用途拆分，详细模型见 [docs/02_db_access_model.md](docs/02_db_access_model.md)。
+
+- `xhs_geo_ro`：只读账号，给画布项目、DBeaver、以及 dashboard 的纯查询接口使用。
+- `xhs_geo_dashboard_rw`：Vercel Web 和认证/写日志接口使用，只碰 dashboard 自己需要写的表。
+- `xhs_geo_worker_rw`：云服务器 GEO 脚本使用，只碰抓取、分析、资产、向量和运维表。
+- `xhs_geo_migration_owner`：只用于 migration、DDL、grant 和回填，不进入任何运行时。
+
+`web/api/db-query.js` 这类管理员查询入口即使保留，也只能走只读账号，最好进一步收窄到固定视图。
+
 ## 当前运行环境
 
 - GitHub 仓库：`fengxiaowei75-ctrl/geo-xhs`
@@ -80,6 +98,7 @@ curl -s https://example-project.vercel.app/api/dashboard | head -c 140
 允许改：
 
 - `server/scripts/GEO/`
+- `server/scripts/麦富迪/`，仅当用户明确恢复该项目时；当前默认暂停
 - `server/requirements.txt`
 - `server/systemd/`，仅当服务启动命令、重启策略、日志路径、环境变量加载方式发生变化
 - `server/README.md`
