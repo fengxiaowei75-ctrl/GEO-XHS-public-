@@ -32,6 +32,10 @@ DEFAULT_EXCEL_FILE = os.environ.get("XHS_GEO_DEFAULT_EXCEL_FILE") or (
 )
 DEFAULT_TABLE = "public.note_details"
 DEFAULT_ENDATA_TOKEN = ""
+DEFAULT_DB_HOST = os.environ.get("PGHOST") or "localhost"
+DEFAULT_DB_PORT = os.environ.get("PGPORT") or "5432"
+DEFAULT_DB_NAME = os.environ.get("PGDATABASE") or "xhs_geo"
+DEFAULT_DB_USER = os.environ.get("PGUSER") or "app_user"
 
 XLSX_NS = {
     "a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
@@ -55,10 +59,10 @@ def parse_args():
     parser.add_argument("--retries", type=int, default=4)
     parser.add_argument("--retry-sleep", type=float, default=2.0)
     parser.add_argument("--endata-token", default="")
-    parser.add_argument("--db-host", default="localhost")
-    parser.add_argument("--db-port", default="5432")
-    parser.add_argument("--db-name", default="xhs_geo")
-    parser.add_argument("--db-user", default="app_user")
+    parser.add_argument("--db-host", default=DEFAULT_DB_HOST)
+    parser.add_argument("--db-port", default=DEFAULT_DB_PORT)
+    parser.add_argument("--db-name", default=DEFAULT_DB_NAME)
+    parser.add_argument("--db-user", default=DEFAULT_DB_USER)
     parser.add_argument("--db-password", default="")
     return parser.parse_args()
 

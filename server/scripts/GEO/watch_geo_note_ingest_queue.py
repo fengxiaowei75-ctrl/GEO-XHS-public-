@@ -31,6 +31,10 @@ DEFAULT_ASSET_TABLE = "public.geo_note_content_assets"
 DEFAULT_VECTOR_TABLE = "public.geo_note_content_asset_vectors"
 DEFAULT_PROMPT_VERSION = asset_pipeline.DEFAULT_PROMPT_VERSION
 DEFAULT_LISTEN_CHANNEL = "geo_note_ingest_queue_changed"
+DEFAULT_DB_HOST = os.environ.get("PGHOST") or "localhost"
+DEFAULT_DB_PORT = os.environ.get("PGPORT") or "5432"
+DEFAULT_DB_NAME = os.environ.get("PGDATABASE") or "xhs_geo"
+DEFAULT_DB_USER = os.environ.get("PGUSER") or "app_user"
 
 
 def parse_args():
@@ -67,10 +71,10 @@ def parse_args():
         action="store_true",
         help="Run embedding inside each queue child process. Default relies on the asset-vector watcher.",
     )
-    parser.add_argument("--db-host", default="localhost")
-    parser.add_argument("--db-port", default="5432")
-    parser.add_argument("--db-name", default="xhs_geo")
-    parser.add_argument("--db-user", default="app_user")
+    parser.add_argument("--db-host", default=DEFAULT_DB_HOST)
+    parser.add_argument("--db-port", default=DEFAULT_DB_PORT)
+    parser.add_argument("--db-name", default=DEFAULT_DB_NAME)
+    parser.add_argument("--db-user", default=DEFAULT_DB_USER)
     parser.add_argument("--db-password", default="")
     return parser.parse_args()
 

@@ -1,0 +1,92 @@
+name: geo-xhs
+
+x-geo-env: &geo-env
+  XHS_SYNC_ENV_FILE: /dev/null
+  PGHOST: ${PGHOST:-localhost}
+  PGPORT: ${PGPORT:-5432}
+  PGDATABASE: ${PGDATABASE:-xhs_geo}
+  PGUSER: ${PGUSER:-app_user}
+  PGPASSWORD: ${PGPASSWORD:-}
+  ENDATA_TOKEN: ${ENDATA_TOKEN:-}
+  GEO_CONTENT_API_KEY: ${GEO_CONTENT_API_KEY:-}
+  GEO_CONTENT_BASE_URL: ${GEO_CONTENT_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}
+  GEO_CONTENT_MODEL: ${GEO_CONTENT_MODEL:-doubao-seed-2-0-mini-260428}
+  GEO_CONTENT_TEMPERATURE: ${GEO_CONTENT_TEMPERATURE:-0.6}
+  GEO_CONTENT_THINKING: ${GEO_CONTENT_THINKING:-disabled}
+  ARK_CHAT_API_KEY: ${ARK_CHAT_API_KEY:-}
+  ARK_CHAT_BASE_URL: ${ARK_CHAT_BASE_URL:-}
+  ARK_CHAT_MODEL: ${ARK_CHAT_MODEL:-}
+  ARK_CHAT_TEMPERATURE: ${ARK_CHAT_TEMPERATURE:-}
+  ARK_CHAT_THINKING: ${ARK_CHAT_THINKING:-}
+  KIMI_API_KEY: ${KIMI_API_KEY:-}
+  KIMI_BASE_URL: ${KIMI_BASE_URL:-}
+  KIMI_MODEL: ${KIMI_MODEL:-}
+  KIMI_TEMPERATURE: ${KIMI_TEMPERATURE:-}
+  KIMI_THINKING: ${KIMI_THINKING:-}
+  ARK_API_KEY: ${ARK_API_KEY:-}
+  VOLC_API_KEY: ${VOLC_API_KEY:-}
+  ARK_EMBEDDING_MODEL: ${ARK_EMBEDDING_MODEL:-doubao-embedding-vision-251215}
+  IMAGE_GENERATION_API_KEY: ${IMAGE_GENERATION_API_KEY:-}
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    working_dir: /opt/xhs-sync/web
+    command: sh -c 'if [ ! -x node_modules/.bin/vite ]; then npm ci; fi && npm run dev'
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./web:/opt/xhs-sync/web
+      - web_node_modules:/opt/xhs-sync/web/node_modules
+    environment:
+      NODE_ENV: development
+    init: true
+
+  geo-note-ingest:
+    build:
+      context: .
+      dockerfile: docker/server.Dockerfile
+    working_dir: /opt/xhs-sync
+    command:
+      [
+        "python",
+        "/opt/xhs-sync/server/scripts/GEO/watch_geo_note_ingest_queue.py",
+        "--watch",
+        "--enqueue-existing",
+        "--poll-interval",
+        "30",
+        "--batch-size",
+        "1",
+        "--job-timeout",
+        "1200",
+        "--child-timeout",
+        "180",
+        "--child-retries",
+        "1",
+        "--detail-concurrency",
+        "4",
+        "--image-concurrency",
+        "4",
+      ]
+    profiles: ["workers"]
+    volumes:
+      - ./server:/opt/xhs-sync/server
+    environment: *geo-env
+    init: true
+
+  geo-asset-vector:
+    build:
+      context: .
+      dockerfile: docker/server.Dockerfile
+    working_dir: /opt/xhs-sync
+    command: ["python", "/opt/xhs-sync/server/scripts/GEO/embed_geo_content_assets.py", "--watch", "--poll-interval", "60", "--limit", "50"]
+    profiles: ["workers"]
+    volumes:
+      - ./server:/opt/xhs-sync/server
+    environment: *geo-env
+    init: true
+
+volumes:
+  web_node_modules:

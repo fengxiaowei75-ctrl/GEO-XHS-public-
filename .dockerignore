@@ -1,0 +1,16 @@
+.git
+.github
+.vercel
+dist
+node_modules
+logs
+output
+server/__pycache__
+server/scripts/**/__pycache__
+server/scripts/**/.pytest_cache
+server/secrets
+.env
+.env.local
+*.log
+*.pyc
+.DS_Store

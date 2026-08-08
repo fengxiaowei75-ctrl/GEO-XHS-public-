@@ -2,6 +2,14 @@
 
 这里只维护 GEO 主链路；`server/scripts/麦富迪/` 已暂停，不在当前运行和部署范围内。
 
+本地协同可以从仓库根目录运行：
+
+```bash
+docker compose --profile workers up --build
+```
+
+容器会启动队列 worker 和向量 worker；生产服务器仍使用 systemd 托管同一批脚本。
+
 ## 数据库
 
 默认数据库：`xhs_geo`

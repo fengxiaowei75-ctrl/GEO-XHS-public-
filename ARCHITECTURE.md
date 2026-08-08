@@ -15,6 +15,7 @@ docs/      可选：数据库字段、内容逻辑、Agent skill、分析文档
 - `web/` 走 GitHub -> Vercel，负责前台和 Serverless API。
 - `server/scripts/GEO/` 是 GEO 主链路，线上运行目录是 `/opt/xhs-sync/scripts/GEO`。
 - `server/scripts/麦富迪/` 保留但已暂停，`xhs-realtime.service` 不再作为自动入口。
+- `docker-compose.yml` 是本地协同入口，可以同时启动 Web 和 GEO worker；当前不替代线上 Vercel/systemd。
 - GitHub Actions 当前只负责更新服务器上的部署镜像，不会自动替换 GEO 线上运行目录；GEO 线上脚本变更仍要同步到 `/opt/xhs-sync/scripts/GEO` 并重启受影响服务。
 
 ## 数据库账号分层
@@ -48,6 +49,7 @@ docs/      可选：数据库字段、内容逻辑、Agent skill、分析文档
 
 - 改 `server/` 代码时，GitHub 里的对应文件和云服务器 `/opt/xhs-sync/scripts/GEO` 的运行文件都必须同步更新，任务才算完成。
 - 改 `web/` 代码时，必须 commit 并 push 到 GitHub，让 Vercel 从 GitHub 自动部署。
+- 改 Docker 启动入口时，必须同步更新 `docker-compose.yml`、`docker/` 和 README 中的启动说明。
 - 涉及数据库结构变更时，必须先写 SQL migration 文件，不能直接临时改库。
 - 不提交明文 key、密码、token、`.env.local`、`/opt/xhs-sync/sync.env`、日志、下载图片、缓存、`node_modules/`、构建产物。
 

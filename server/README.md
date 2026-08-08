@@ -8,6 +8,17 @@
 
 当前只维护 GEO 主链路；`server/scripts/麦富迪/` 作为历史保留目录，已暂停，不进入当前自动化链路。
 
+## Docker
+
+本地协同可以用根目录 `docker-compose.yml` 启动 GEO workers：
+
+```bash
+cp .env.example .env
+docker compose --profile workers up --build
+```
+
+Docker 容器读取 `.env` 中的 `PG*`、`ENDATA_TOKEN`、`ARK_API_KEY` 等变量；生产服务器当前仍使用 systemd 托管 `/opt/xhs-sync/scripts/GEO` 下的 worker。
+
 ## Active Services
 
 Service 文件备份在：
