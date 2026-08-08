@@ -1357,41 +1357,17 @@ function ImageGenerationWorkflow({ data }) {
           })}
         </div>
         {editingSlot ? (
-          <form className="image-edit-panel" onSubmit={editGeneratedImage}>
-            <div className="image-edit-head">
-              <strong>{imageVersionLabel(editingSourceImage || { slot: editingSlot })}</strong>
-              <button
-                className="copy-button"
-                type="button"
-                onClick={resetImageEdit}
-                disabled={editingImage}
-              >
-                取消
-              </button>
-            </div>
-            <textarea
-              value={editInstruction}
-              onChange={(event) => setEditInstruction(event.target.value)}
-              placeholder="只写这次要改的点；如果选择派生2张，可以写：把这张拆成问题页和方法页"
-              rows={4}
-            />
-            <div className="image-edit-options">
-              <SelectControl
-                value={editImageCount}
-                onChange={setEditImageCount}
-                label="输出"
-                options={[
-                  { value: "1", label: "改图 1 张" },
-                  { value: "2", label: "改图 + 新图 2 张" },
-                ]}
-              />
-            </div>
-            <div className="image-edit-actions">
-              <button className="primary-button" type="submit" disabled={editingImage}>
-                {editingImage ? "改图中" : "确认改图"}
-              </button>
-            </div>
-          </form>
+          <ImageEditPanel
+            title={imageVersionLabel(editingSourceImage || { slot: editingSlot })}
+            instruction={editInstruction}
+            onInstructionChange={setEditInstruction}
+            imageCount={editImageCount}
+            onImageCountChange={setEditImageCount}
+            onCancel={resetImageEdit}
+            onSubmit={editGeneratedImage}
+            editing={editingImage}
+            placeholder="只写这次要改的点；如果选择派生2张，可以写：把这张拆成问题页和方法页"
+          />
         ) : null}
         {result ? (
           <>
@@ -1451,16 +1427,7 @@ function ImageGenerationWorkflow({ data }) {
           )}
         </div>
       </section>
-      {previewImage ? (
-        <div className="image-preview-backdrop" onClick={() => setPreviewImage(null)} role="presentation">
-          <div className="image-preview-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-            <button className="icon-button" type="button" onClick={() => setPreviewImage(null)} aria-label="关闭图片预览">
-              <XCircle size={18} />
-            </button>
-            <img src={previewImage.url} alt="图片预览" />
-          </div>
-        </div>
-      ) : null}
+      <ImagePreviewModal image={previewImage} onClose={() => setPreviewImage(null)} />
     </section>
   );
 }
@@ -1595,13 +1562,6 @@ function sourceImagesForNote(note) {
   (note?.source_images || []).forEach((image) => add(image.url || image.imageUrl, image.source || "source_image"));
   normalizeWorkflowImagePrompts(note?.image_prompts).forEach((prompt) => add(prompt.imageUrl, "image_analysis"));
   return items;
-}
-
-function fixedProgressStepClass(progress, index) {
-  if (progress.status === "failed" && index === progress.activeStep) return "failed";
-  if (progress.status === "done" || index < progress.activeStep) return "done";
-  if (index === progress.activeStep && progress.status !== "idle") return "active";
-  return "";
 }
 
 function FixedContentFlow({ data }) {
@@ -2107,50 +2067,22 @@ function FixedContentFlow({ data }) {
                 ))}
               </div>
               {editingSlot ? (
-                <form className="image-edit-panel" onSubmit={editFixedGeneratedImage}>
-                  <div className="image-edit-head">
-                    <strong>{imageVersionLabel(editingSourceImage || { slot: editingSlot })}</strong>
-                      <button className="copy-button" type="button" onClick={resetFixedImageEdit} disabled={editingImage}>
-                        取消
-                      </button>
-                  </div>
-                  <textarea
-                    value={editInstruction}
-                    onChange={(event) => setEditInstruction(event.target.value)}
-                    placeholder="只写这次要改的点；如果要拆成两张图，可以写清楚两张图各自承担什么内容"
-                    rows={4}
-                  />
-                  <div className="image-edit-options">
-                    <SelectControl
-                      value={editImageCount}
-                      onChange={setEditImageCount}
-                      label="输出"
-                      options={[
-                        { value: "1", label: "改图 1 张" },
-                        { value: "2", label: "改图 + 新图 2 张" },
-                      ]}
-                    />
-                  </div>
-                  <div className="image-edit-actions">
-                    <button className="primary-button" type="submit" disabled={editingImage}>
-                      {editingImage ? "改图中" : "确认改图"}
-                    </button>
-                  </div>
-                </form>
+                <ImageEditPanel
+                  title={imageVersionLabel(editingSourceImage || { slot: editingSlot })}
+                  instruction={editInstruction}
+                  onInstructionChange={setEditInstruction}
+                  imageCount={editImageCount}
+                  onImageCountChange={setEditImageCount}
+                  onCancel={resetFixedImageEdit}
+                  onSubmit={editFixedGeneratedImage}
+                  editing={editingImage}
+                  placeholder="只写这次要改的点；如果要拆成两张图，可以写清楚两张图各自承担什么内容"
+                />
               ) : null}
             </section>
           </div>
         </section>
-        {previewImage ? (
-          <div className="image-preview-backdrop" onClick={() => setPreviewImage(null)} role="presentation">
-            <div className="image-preview-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-              <button className="icon-button" type="button" onClick={() => setPreviewImage(null)} aria-label="关闭图片预览">
-                <XCircle size={18} />
-              </button>
-              <img src={previewImage.url} alt="图片预览" />
-            </div>
-          </div>
-        ) : null}
+        <ImagePreviewModal image={previewImage} onClose={() => setPreviewImage(null)} />
       </section>
     );
   }
@@ -2286,14 +2218,7 @@ function FixedContentFlow({ data }) {
               </div>
 
               <div className="fixed-progress-panel">
-                <div className="fixed-progress-steps">
-                  {fixedRewriteSteps.map((step, index) => (
-                    <span key={step} className={fixedProgressStepClass(progress, index)}>
-                      {fixedProgressStepClass(progress, index) === "done" ? <CheckCircle2 size={14} /> : <Clock3 size={14} />}
-                      {step}
-                    </span>
-                  ))}
-                </div>
+                <WorkflowSteps steps={fixedRewriteSteps} progress={progress} />
                 <div className={`fixed-progress-message ${progress.status === "failed" ? "failed" : ""}`}>{progress.message}</div>
                 {runningImageResult ? (
                   <div className="fixed-running-slots">
@@ -2366,16 +2291,7 @@ function FixedContentFlow({ data }) {
           )}
         </section>
       </section>
-      {previewImage ? (
-        <div className="image-preview-backdrop" onClick={() => setPreviewImage(null)} role="presentation">
-          <div className="image-preview-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-            <button className="icon-button" type="button" onClick={() => setPreviewImage(null)} aria-label="关闭图片预览">
-              <XCircle size={18} />
-            </button>
-            <img src={previewImage.url} alt="图片预览" />
-          </div>
-        </div>
-      ) : null}
+      <ImagePreviewModal image={previewImage} onClose={() => setPreviewImage(null)} />
     </section>
   );
 }
@@ -2753,14 +2669,7 @@ function DraftReviewFlow({ data, onNavigate }) {
       </section>
 
       <section className="panel draft-review-progress-panel">
-        <div className="fixed-progress-steps">
-          {reviewDraftSteps.map((step, index) => (
-            <span key={step} className={fixedProgressStepClass(progress, index)}>
-              {fixedProgressStepClass(progress, index) === "done" ? <CheckCircle2 size={14} /> : <Clock3 size={14} />}
-              {step}
-            </span>
-          ))}
-        </div>
+        <WorkflowSteps steps={reviewDraftSteps} progress={progress} />
         <div className={`fixed-progress-message ${progress.status === "failed" ? "failed" : ""}`}>{progressMessage}</div>
       </section>
 
@@ -2882,52 +2791,24 @@ function DraftReviewFlow({ data, onNavigate }) {
             <div className="draft-review-empty">暂无图片结果，生成后会横向列在这里</div>
           )}
           {editingSlot ? (
-            <form className="image-edit-panel" onSubmit={editDraftImage}>
-              <div className="image-edit-head">
-                <strong>{imageVersionLabel(editingSourceImage || { slot: editingSlot })}</strong>
-                <button className="copy-button" type="button" onClick={resetImageEdit} disabled={editingImage}>
-                  取消
-                </button>
-              </div>
-              <textarea
-                value={editInstruction}
-                onChange={(event) => setEditInstruction(event.target.value)}
-                placeholder="只写这次要改的点；如果要拆成两张图，可以写清楚两张图各自承担什么内容"
-                rows={4}
-              />
-              <div className="image-edit-options">
-                <SelectControl
-                  value={editImageCount}
-                  onChange={setEditImageCount}
-                  label="输出"
-                  options={[
-                    { value: "1", label: "改图 1 张" },
-                    { value: "2", label: "改图 + 新图 2 张" },
-                  ]}
-                />
-              </div>
-              <div className="image-edit-actions">
-                <button className="primary-button" type="submit" disabled={editingImage}>
-                  {editingImage ? "改图中" : "确认改图"}
-                </button>
-              </div>
-            </form>
+            <ImageEditPanel
+              title={imageVersionLabel(editingSourceImage || { slot: editingSlot })}
+              instruction={editInstruction}
+              onInstructionChange={setEditInstruction}
+              imageCount={editImageCount}
+              onImageCountChange={setEditImageCount}
+              onCancel={resetImageEdit}
+              onSubmit={editDraftImage}
+              editing={editingImage}
+              placeholder="只写这次要改的点；如果要拆成两张图，可以写清楚两张图各自承担什么内容"
+            />
           ) : (
             <div className="draft-review-empty">{generatedImages.length ? "点击图片上的改图按钮继续调整" : "暂无图片结果"}</div>
           )}
         </section>
       </section>
 
-      {previewImage ? (
-        <div className="image-preview-backdrop" onClick={() => setPreviewImage(null)} role="presentation">
-          <div className="image-preview-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-            <button className="icon-button" type="button" onClick={() => setPreviewImage(null)} aria-label="关闭图片预览">
-              <XCircle size={18} />
-            </button>
-            <img src={previewImage.url} alt="图片预览" />
-          </div>
-        </div>
-      ) : null}
+      <ImagePreviewModal image={previewImage} onClose={() => setPreviewImage(null)} />
     </section>
   );
 }
