@@ -18,6 +18,13 @@ docs/      可选：数据库字段、内容逻辑、Agent skill、分析文档
 - `docker-compose.yml` 是本地协同入口，可以同时启动 Web 和 GEO worker；当前不替代线上 Vercel/systemd。
 - GitHub Actions 当前只负责更新服务器上的部署镜像，不会自动替换 GEO 线上运行目录；GEO 线上脚本变更仍要同步到 `/opt/xhs-sync/scripts/GEO` 并重启受影响服务。
 
+## 本地协同 / 生产入口
+
+- `docker-compose.yml` 只用于本地开发、联调和观察 worker 行为，不当作生产入口。
+- 生产 Web 继续走 Vercel。
+- 生产 GEO worker 继续走云服务器上的 `systemd`。
+- 如果要改生产行为，改 GitHub 后仍要同步到服务器运行目录并重启对应服务，不要把本地 compose 当成线上部署替身。
+
 ## 数据库账号分层
 
 数据库权限按用途拆分，详细模型见 [docs/02_db_access_model.md](docs/02_db_access_model.md)。
