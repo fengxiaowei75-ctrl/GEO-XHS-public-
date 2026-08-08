@@ -64,13 +64,14 @@ scp /private/tmp/sync.env root@47.94.156.199:/opt/xhs-sync/sync.env
 
 ## Update Rule
 
-推荐以后把 GitHub 作为唯一代码源：
+GitHub 仍然是唯一代码源，服务器只保留运行副本和 bootstrap 脚本。
 
 ```text
 修改 server/ 代码
 -> commit / push 到 GitHub
--> 云服务器拉取新代码
--> 重启对应 systemd 服务
+-> 服务器上的 `~/bin/deploy.sh` 拉取最新仓库
+-> 仓库内 `server/ops/deploy.sh` 同步 `/opt/xhs-sync/scripts/GEO`
+-> 重启受影响的 systemd 服务
 ```
 
 不要长期直接在 `/opt/xhs-sync/scripts/GEO` 手改线上脚本，否则 GitHub 版本和服务器实际运行版本会分叉。

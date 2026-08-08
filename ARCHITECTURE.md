@@ -16,7 +16,7 @@ docs/      可选：数据库字段、内容逻辑、Agent skill、分析文档
 - `server/scripts/GEO/` 是 GEO 主链路，线上运行目录是 `/opt/xhs-sync/scripts/GEO`。
 - `server/scripts/麦富迪/` 保留但已暂停，`xhs-realtime.service` 不再作为自动入口。
 - `docker-compose.yml` 是本地协同入口，可以同时启动 Web 和 GEO worker；当前不替代线上 Vercel/systemd。
-- GitHub Actions 当前只负责更新服务器上的部署镜像，不会自动替换 GEO 线上运行目录；GEO 线上脚本变更仍要同步到 `/opt/xhs-sync/scripts/GEO` 并重启受影响服务。
+- GitHub Actions 触发服务器上的 `~/bin/deploy.sh`，再由仓库内的 `server/ops/deploy.sh` 同步 `server/scripts/GEO/` 到 `/opt/xhs-sync/scripts/GEO`，并只重启受影响的 GEO 服务。
 
 ## 本地协同 / 生产入口
 
@@ -128,10 +128,11 @@ PYTHONPYCACHEPREFIX=/private/tmp/geo-pycache python3 -m py_compile server/script
 
 ```text
 1. 先 commit 并 push server/ 变更到 GitHub。
-2. 把同一批变更文件同步到云服务器 `/opt/xhs-sync/scripts/GEO`。
-3. 如果 systemd service 文件变了，复制到 `/etc/systemd/system/` 并执行 `systemctl daemon-reload`。
-4. 只重启受影响的服务。
-5. 检查服务状态和最近日志。
+2. 由 `server/ops/deploy-bootstrap.sh` 或服务器上的 `~/bin/deploy.sh` 拉取最新仓库。
+3. 由仓库内的 `server/ops/deploy.sh` 把 `server/scripts/GEO/` 同步到 `/opt/xhs-sync/scripts/GEO`。
+4. 如果 systemd service 文件变了，复制到 `/etc/systemd/system/` 并执行 `systemctl daemon-reload`。
+5. 只重启受影响的服务。
+6. 检查服务状态和最近日志。
 ```
 
 常用服务命令：
