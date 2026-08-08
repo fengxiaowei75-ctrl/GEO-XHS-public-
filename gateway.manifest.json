@@ -1,0 +1,311 @@
+{
+  "schema_version": 1,
+  "project_code": "geo-xhs",
+  "display_name": "GEO XHS",
+  "github_repo": "fengxiaowei75-ctrl/geo-xhs",
+  "runtime": "mixed",
+  "default_high_cost_action": "deny",
+  "features": [
+    {
+      "feature_key": "auth",
+      "display_name": "登录会话",
+      "description": "Dashboard 登录、退出和当前会话查询",
+      "cost_class": "db_write"
+    },
+    {
+      "feature_key": "dashboard_read",
+      "display_name": "驾驶舱查询",
+      "description": "读取内容资产、运行监控、模型配置和统计数据",
+      "cost_class": "db_read"
+    },
+    {
+      "feature_key": "account_admin",
+      "display_name": "账号管理",
+      "description": "管理员创建、更新和禁用 dashboard 账号",
+      "cost_class": "db_write"
+    },
+    {
+      "feature_key": "db_query",
+      "display_name": "管理员只读查询",
+      "description": "管理员通过只读数据库账号执行受限 SELECT 查询",
+      "cost_class": "db_read"
+    },
+    {
+      "feature_key": "coze_chat",
+      "display_name": "Coze 对话",
+      "description": "Dashboard 中转 Coze Agent 流式对话",
+      "cost_class": "llm_chat"
+    },
+    {
+      "feature_key": "vector_search",
+      "display_name": "向量检索",
+      "description": "调用 Ark Embedding 后在 pgvector 中检索内容资产",
+      "cost_class": "embedding"
+    },
+    {
+      "feature_key": "image_generation",
+      "display_name": "图片生成",
+      "description": "调用多米/Domi 提交小红书图片生成或改图任务",
+      "cost_class": "image_generation"
+    },
+    {
+      "feature_key": "image_task_polling",
+      "display_name": "图片任务轮询",
+      "description": "查询 Domi 图片生成任务状态",
+      "cost_class": "external_api"
+    },
+    {
+      "feature_key": "image_note_lookup",
+      "display_name": "图片笔记读取",
+      "description": "读取笔记、图片、内容资产和逐图提示词",
+      "cost_class": "db_read"
+    },
+    {
+      "feature_key": "social_generation",
+      "display_name": "社媒内容生成",
+      "description": "调用 Ark Chat 生成小红书、抖音、公众号、知乎草稿",
+      "cost_class": "llm_chat"
+    },
+    {
+      "feature_key": "draft_package",
+      "display_name": "草稿打包",
+      "description": "下载相关图片并打包社媒草稿 ZIP",
+      "cost_class": "external_api"
+    },
+    {
+      "feature_key": "geo_worker",
+      "display_name": "GEO 后台脚本",
+      "description": "服务器脚本中的艺恩/Endata、Ark Vision、Kimi、Embedding 等外部调用",
+      "cost_class": "external_api"
+    }
+  ],
+  "endpoints": [
+    {
+      "endpoint_key": "POST /api/login",
+      "method": "POST",
+      "path": "/api/login",
+      "source_file": "web/api/login.js",
+      "feature_key": "auth",
+      "auth_required": "none",
+      "cost_class": "db_write",
+      "high_cost": false,
+      "default_policy_key": "auth_login_strict",
+      "description": "Dashboard 用户登录"
+    },
+    {
+      "endpoint_key": "GET /api/me",
+      "method": "GET",
+      "path": "/api/me",
+      "source_file": "web/api/me.js",
+      "feature_key": "auth",
+      "auth_required": "none",
+      "cost_class": "db_read",
+      "high_cost": false,
+      "default_policy_key": "session_read_standard",
+      "description": "读取当前登录状态"
+    },
+    {
+      "endpoint_key": "POST /api/logout",
+      "method": "POST",
+      "path": "/api/logout",
+      "source_file": "web/api/logout.js",
+      "feature_key": "auth",
+      "auth_required": "user",
+      "cost_class": "db_write",
+      "high_cost": false,
+      "default_policy_key": "session_write_standard",
+      "description": "退出登录并撤销会话"
+    },
+    {
+      "endpoint_key": "GET /api/dashboard",
+      "method": "GET",
+      "path": "/api/dashboard",
+      "source_file": "web/api/dashboard.js",
+      "feature_key": "dashboard_read",
+      "auth_required": "user",
+      "cost_class": "db_read",
+      "high_cost": false,
+      "default_policy_key": "dashboard_read_standard",
+      "description": "读取 dashboard 内容、运维和模型配置数据"
+    },
+    {
+      "endpoint_key": "GET /api/admin/users",
+      "method": "GET",
+      "path": "/api/admin/users",
+      "source_file": "web/api/admin/users.js",
+      "feature_key": "account_admin",
+      "auth_required": "admin",
+      "cost_class": "db_read",
+      "high_cost": false,
+      "default_policy_key": "admin_read_standard",
+      "description": "管理员读取账号列表"
+    },
+    {
+      "endpoint_key": "POST /api/admin/users",
+      "method": "POST",
+      "path": "/api/admin/users",
+      "source_file": "web/api/admin/users.js",
+      "feature_key": "account_admin",
+      "auth_required": "admin",
+      "cost_class": "db_write",
+      "high_cost": false,
+      "default_policy_key": "admin_write_strict",
+      "description": "管理员创建或更新账号"
+    },
+    {
+      "endpoint_key": "POST /api/db-query",
+      "method": "POST",
+      "path": "/api/db-query",
+      "source_file": "web/api/db-query.js",
+      "feature_key": "db_query",
+      "auth_required": "admin",
+      "cost_class": "db_read",
+      "high_cost": false,
+      "default_policy_key": "db_query_sensitive",
+      "description": "管理员只读 SQL 查询入口"
+    },
+    {
+      "endpoint_key": "POST /api/chat",
+      "method": "POST",
+      "path": "/api/chat",
+      "source_file": "web/api/chat.js",
+      "feature_key": "coze_chat",
+      "auth_required": "user",
+      "cost_class": "llm_chat",
+      "high_cost": true,
+      "default_policy_key": "llm_chat_standard",
+      "description": "Coze Agent 流式聊天"
+    },
+    {
+      "endpoint_key": "POST /api/vector-search",
+      "method": "POST",
+      "path": "/api/vector-search",
+      "source_file": "web/api/vector-search.js",
+      "feature_key": "vector_search",
+      "auth_required": "user",
+      "cost_class": "embedding",
+      "high_cost": true,
+      "default_policy_key": "embedding_search_standard",
+      "description": "Ark Embedding + pgvector 内容资产检索"
+    },
+    {
+      "endpoint_key": "POST /api/image-generate",
+      "method": "POST",
+      "path": "/api/image-generate",
+      "source_file": "web/api/image-generate.js",
+      "feature_key": "image_generation",
+      "auth_required": "user",
+      "cost_class": "image_generation",
+      "high_cost": true,
+      "default_policy_key": "image_generation_standard",
+      "description": "Domi 图片生成/改图任务提交"
+    },
+    {
+      "endpoint_key": "GET /api/image-task",
+      "method": "GET",
+      "path": "/api/image-task",
+      "source_file": "web/api/image-task.js",
+      "feature_key": "image_task_polling",
+      "auth_required": "user",
+      "cost_class": "external_api",
+      "high_cost": false,
+      "default_policy_key": "task_polling_standard",
+      "description": "Domi 图片任务状态查询"
+    },
+    {
+      "endpoint_key": "POST /api/image-note",
+      "method": "POST",
+      "path": "/api/image-note",
+      "source_file": "web/api/image-note.js",
+      "feature_key": "image_note_lookup",
+      "auth_required": "user",
+      "cost_class": "db_read",
+      "high_cost": false,
+      "default_policy_key": "content_read_standard",
+      "description": "读取指定笔记和图片内容资产"
+    },
+    {
+      "endpoint_key": "POST /api/social-generate",
+      "method": "POST",
+      "path": "/api/social-generate",
+      "source_file": "web/api/social-generate.js",
+      "feature_key": "social_generation",
+      "auth_required": "user",
+      "cost_class": "llm_chat",
+      "high_cost": true,
+      "default_policy_key": "llm_generation_standard",
+      "description": "Ark Chat 生成社媒内容草稿"
+    },
+    {
+      "endpoint_key": "POST /api/draft-package",
+      "method": "POST",
+      "path": "/api/draft-package",
+      "source_file": "web/api/draft-package.js",
+      "feature_key": "draft_package",
+      "auth_required": "user",
+      "cost_class": "external_api",
+      "high_cost": false,
+      "default_policy_key": "draft_package_standard",
+      "description": "下载图片并打包社媒草稿 ZIP"
+    }
+  ],
+  "providers": [
+    {
+      "provider_code": "coze_chat",
+      "provider_type": "llm_chat",
+      "display_name": "Coze Agent",
+      "billable": true,
+      "billing_unit": "call"
+    },
+    {
+      "provider_code": "volcengine_ark_chat",
+      "provider_type": "llm_chat",
+      "display_name": "火山 Ark Chat",
+      "billable": true,
+      "billing_unit": "token"
+    },
+    {
+      "provider_code": "volcengine_ark_embedding",
+      "provider_type": "embedding",
+      "display_name": "火山 Ark Embedding",
+      "billable": true,
+      "billing_unit": "token"
+    },
+    {
+      "provider_code": "volcengine_ark_vision",
+      "provider_type": "llm_vision",
+      "display_name": "火山 Ark Vision",
+      "billable": true,
+      "billing_unit": "token"
+    },
+    {
+      "provider_code": "domi_image_generation",
+      "provider_type": "image_generation",
+      "display_name": "Domi 图片生成",
+      "billable": true,
+      "billing_unit": "image"
+    },
+    {
+      "provider_code": "kimi_chat",
+      "provider_type": "llm_chat",
+      "display_name": "Kimi Chat",
+      "billable": true,
+      "billing_unit": "token"
+    },
+    {
+      "provider_code": "endata_xhs_note_detail",
+      "provider_type": "external_api",
+      "display_name": "艺恩小红书详情 API",
+      "billable": true,
+      "billing_unit": "call"
+    },
+    {
+      "provider_code": "xhs_image_download",
+      "provider_type": "media_fetch",
+      "display_name": "小红书图片下载",
+      "billable": false,
+      "billing_unit": "byte"
+    }
+  ]
+}
+

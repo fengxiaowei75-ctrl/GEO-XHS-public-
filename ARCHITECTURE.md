@@ -36,6 +36,20 @@ docs/      可选：数据库字段、内容逻辑、Agent skill、分析文档
 
 `web/api/db-query.js` 这类管理员查询入口即使保留，也只能走只读账号，最好进一步收窄到固定视图。
 
+## Gateway Monitor
+
+本项目必须接入 `gateway-monitor`。这是跨项目 API 网关、成本监控、限流和问题定位系统，不是可选文档。
+
+强制规则：
+
+- 所有 API 端点必须登记在 `gateway.manifest.json`。
+- 所有 LLM、Embedding、图片生成、Coze、Domi、Kimi、艺恩/Endata 等高成本调用必须声明项目、功能、接口、provider 和 cost class。
+- 新增 API 必须在同一个 commit 更新 `gateway.manifest.json`。
+- 未登记业务身份的高成本 API 默认禁止上线或调用。
+- GitHub Actions 的 `Gateway Contract` 检查必须保持通过。
+
+第一阶段先登记和检查，不迁移真实 provider key。第二阶段再把高成本调用逐步改成通过 `gateway-monitor` SDK/服务代理，老项目只保留 `GATEWAY_SERVICE_TOKEN`。
+
 ## 当前运行环境
 
 - GitHub 仓库：`fengxiaowei75-ctrl/geo-xhs`
