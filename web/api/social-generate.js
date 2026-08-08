@@ -1,5 +1,6 @@
 const { Pool } = require("pg");
 const { requireAuth } = require("./_auth");
+const { checkGateway, makeGatewayContext, reportGateway } = require("./_gateway");
 
 const PROVIDER_CODE = "volcengine_ark_chat";
 const DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
@@ -300,6 +301,9 @@ module.exports = async function handler(req, res) {
   const startedAt = new Date();
   const startedMono = Date.now();
   let client = null;
+  let gatewayContext = null;
+  let gatewayDecision = null;
+  let gatewayReported = false;
 
   try {
     const user = await requireAuth(req, res, "content");
@@ -319,6 +323,33 @@ module.exports = async function handler(req, res) {
     }
 
     const prompt = buildUserPrompt(input, platform);
+    gatewayContext = makeGatewayContext({
+      user,
+      featureKey: "social_generation",
+      endpointKey: "POST /api/social-generate",
+      providerCode: PROVIDER_CODE,
+      modelName: model,
+      costClass: "llm_chat",
+      highCost: true,
+      description: "Ark Chat 生成社媒内容草稿",
+      metadata: {
+        platform,
+        prompt_chars: prompt.length,
+        note_id: cleanText(input.noteId, 120) || null,
+      },
+    });
+    try {
+      gatewayDecision = await checkGateway(gatewayContext);
+    } catch (error) {
+      if (error.retryAfterSeconds) res.setHeader("Retry-After", String(error.retryAfterSeconds));
+      sendJson(res, error.statusCode || 503, {
+        ok: false,
+        error: "网关限制：社媒内容生成暂不可用",
+        detail: error.gateway || error.message,
+      });
+      return;
+    }
+
     const dbPool = getPool();
     if (dbPool) client = await dbPool.connect();
     const modelConfig = await lookupModelConfig(client, model);
@@ -380,10 +411,30 @@ module.exports = async function handler(req, res) {
         model,
         prompt_chars: prompt.length,
         user_id: user.user_id,
+        gateway_request_id: gatewayDecision?.requestId || gatewayContext.requestId,
+        gateway_policy_id: gatewayDecision?.policyId || null,
       },
     });
 
     if (!modelRes.ok || !content) {
+      await reportGateway(
+        { ...gatewayContext, ...(gatewayDecision || {}) },
+        {
+          status: "failed",
+          latencyMs,
+          inputTokens: usage.input_tokens,
+          outputTokens: usage.output_tokens,
+          totalTokens: usage.total_tokens,
+          errorCode: String(payload?.error?.code || payload?.code || modelRes.status),
+          errorMessage: String(payload?.error?.message || payload?.message || responseText).slice(0, 500),
+          metadata: {
+            platform,
+            usage: usage.raw,
+            upstream_status: modelRes.status,
+          },
+        },
+      );
+      gatewayReported = true;
       sendJson(res, modelRes.ok ? 502 : modelRes.status, {
         ok: false,
         error: payload?.error?.message || payload?.message || "社媒内容生成失败",
@@ -392,6 +443,23 @@ module.exports = async function handler(req, res) {
       });
       return;
     }
+
+    await reportGateway(
+      { ...gatewayContext, ...(gatewayDecision || {}) },
+      {
+        status: "success",
+        latencyMs,
+        inputTokens: usage.input_tokens,
+        outputTokens: usage.output_tokens,
+        totalTokens: usage.total_tokens,
+        metadata: {
+          platform,
+          usage: usage.raw,
+          content_chars: content.length,
+        },
+      },
+    );
+    gatewayReported = true;
 
     sendJson(res, 200, {
       ok: true,
@@ -406,6 +474,17 @@ module.exports = async function handler(req, res) {
   } catch (error) {
     const finishedAt = new Date();
     const latencyMs = Date.now() - startedMono;
+    if (gatewayContext && !gatewayReported) {
+      await reportGateway(
+        { ...gatewayContext, ...(gatewayDecision || {}) },
+        {
+          status: "failed",
+          latencyMs,
+          errorCode: "request_exception",
+          errorMessage: error.message,
+        },
+      );
+    }
     if (client) {
       await writeApiLog(client, {
         traceId: `web:social-draft:${Date.now()}`,
@@ -420,7 +499,11 @@ module.exports = async function handler(req, res) {
         errorCode: "request_exception",
         errorMessage: error.message,
         rawUsage: {},
-        metadata: { source: "web_social_generation_workflow" },
+        metadata: {
+          source: "web_social_generation_workflow",
+          gateway_request_id: gatewayDecision?.requestId || gatewayContext?.requestId || null,
+          gateway_policy_id: gatewayDecision?.policyId || null,
+        },
       });
     }
     sendJson(res, error.statusCode || 500, { ok: false, error: error.message || "社媒内容生成失败" });

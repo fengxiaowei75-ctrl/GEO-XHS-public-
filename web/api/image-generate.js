@@ -1,5 +1,6 @@
 const { Pool } = require("pg");
 const { requireAuth } = require("./_auth");
+const { checkGateway, makeGatewayContext, reportGateway } = require("./_gateway");
 
 const PROVIDER_CODE = "duomi_image_generation";
 const DEFAULT_IMAGE_API_URL = "https://duomiapi.com/v1/images/generations";
@@ -376,6 +377,9 @@ module.exports = async function handler(req, res) {
   const startedAt = new Date();
   const startedMono = Date.now();
   let client = null;
+  let activeGatewayContext = null;
+  let activeGatewayDecision = null;
+  let activeGatewayReported = false;
 
   try {
     const user = await requireAuth(req, res, "content");
@@ -424,6 +428,40 @@ module.exports = async function handler(req, res) {
       const slotPrompt = buildSlotPrompt(input, slot, imageCount, imagePrompts);
       const requestBody = { model, prompt: slotPrompt, size, oversea };
       const referenceImageSent = appendReferenceImage(requestBody, referenceImage);
+
+      activeGatewayContext = makeGatewayContext({
+        user,
+        featureKey: "image_generation",
+        endpointKey: "POST /api/image-generate",
+        providerCode: "domi_image_generation",
+        modelName: model,
+        costClass: "image_generation",
+        highCost: true,
+        description: "Domi 图片生成/改图任务提交",
+        metadata: {
+          slot,
+          image_count_requested: imageCount,
+          workflow_action: workflowAction,
+          size,
+          oversea,
+          has_reference_image: Boolean(referenceImage),
+          prompt_chars: slotPrompt.length,
+          note_id: noteId || null,
+        },
+      });
+      activeGatewayDecision = null;
+      activeGatewayReported = false;
+      try {
+        activeGatewayDecision = await checkGateway(activeGatewayContext);
+      } catch (error) {
+        if (error.retryAfterSeconds) res.setHeader("Retry-After", String(error.retryAfterSeconds));
+        sendJson(res, error.statusCode || 503, {
+          ok: false,
+          error: "网关限制：图片生成暂不可用",
+          detail: error.gateway || error.message,
+        });
+        return;
+      }
 
       const providerRes = await fetch(endpoint.toString(), {
         method: "POST",
@@ -478,11 +516,30 @@ module.exports = async function handler(req, res) {
           slot,
           edit_slot: editSlot,
           user_id: user.user_id,
+          gateway_request_id: activeGatewayDecision?.requestId || activeGatewayContext.requestId,
+          gateway_policy_id: activeGatewayDecision?.policyId || null,
         },
       });
       if (logWarning) logWarnings.push(`第${slot}张：${logWarning}`);
 
       if (!providerRes.ok) {
+        await reportGateway(
+          { ...activeGatewayContext, ...(activeGatewayDecision || {}) },
+          {
+            status: "failed",
+            latencyMs,
+            imageCount: 0,
+            errorCode: String(payload?.error?.code || payload?.code || providerRes.status),
+            errorMessage: String(payload?.error?.message || payload?.message || responseText).slice(0, 500),
+            metadata: {
+              slot,
+              upstream_status: providerRes.status,
+              workflow_action: workflowAction,
+              task_id: taskId || null,
+            },
+          },
+        );
+        activeGatewayReported = true;
         sendJson(res, providerRes.status, {
           ok: false,
           error: payload?.error?.message || payload?.message || `第${slot}张图生成任务创建失败`,
@@ -493,6 +550,22 @@ module.exports = async function handler(req, res) {
       }
 
       if (!taskId && !images.length) {
+        await reportGateway(
+          { ...activeGatewayContext, ...(activeGatewayDecision || {}) },
+          {
+            status: "failed",
+            latencyMs,
+            imageCount: 0,
+            errorCode: "missing_task_or_image",
+            errorMessage: "任务创建成功但响应中没有任务 ID 或图片 URL",
+            metadata: {
+              slot,
+              workflow_action: workflowAction,
+              upstream_status: providerRes.status,
+            },
+          },
+        );
+        activeGatewayReported = true;
         sendJson(res, 502, {
           ok: false,
           error: `第${slot}张图任务创建成功，但响应中没有找到任务 ID 或图片 URL`,
@@ -501,6 +574,24 @@ module.exports = async function handler(req, res) {
         });
         return;
       }
+
+      await reportGateway(
+        { ...activeGatewayContext, ...(activeGatewayDecision || {}) },
+        {
+          status: "success",
+          latencyMs,
+          imageCount: 1,
+          metadata: {
+            slot,
+            workflow_action: workflowAction,
+            task_id: taskId || null,
+            image_count: images.length,
+            image_count_requested: imageCount,
+            upstream_status: providerRes.status,
+          },
+        },
+      );
+      activeGatewayReported = true;
 
       tasks.push({ slot, taskId, images });
       allImages.push(...images);
@@ -523,6 +614,18 @@ module.exports = async function handler(req, res) {
   } catch (error) {
     const finishedAt = new Date();
     const latencyMs = Date.now() - startedMono;
+    if (activeGatewayContext && !activeGatewayReported) {
+      await reportGateway(
+        { ...activeGatewayContext, ...(activeGatewayDecision || {}) },
+        {
+          status: "failed",
+          latencyMs,
+          imageCount: 0,
+          errorCode: "request_exception",
+          errorMessage: error.message,
+        },
+      );
+    }
     if (client) {
       await writeApiLog(client, {
         traceId: `web:image-generation:${Date.now()}`,
@@ -538,7 +641,12 @@ module.exports = async function handler(req, res) {
         errorCode: "request_exception",
         errorMessage: error.message,
         rawUsage: {},
-        metadata: { source: "web_image_generation_workflow", provider: "duomiapi" },
+        metadata: {
+          source: "web_image_generation_workflow",
+          provider: "duomiapi",
+          gateway_request_id: activeGatewayDecision?.requestId || activeGatewayContext?.requestId || null,
+          gateway_policy_id: activeGatewayDecision?.policyId || null,
+        },
       });
     }
     sendJson(res, error.statusCode || 500, { ok: false, error: error.message || "图像生成任务创建失败" });

@@ -1,5 +1,6 @@
 const DEFAULT_COZE_API_BASE = "https://api.coze.cn";
 const { requireAuth } = require("./_auth");
+const { checkGateway, makeGatewayContext, reportGateway } = require("./_gateway");
 
 async function readJsonBody(req) {
   if (req.body && typeof req.body === "object") return req.body;
@@ -27,6 +28,11 @@ module.exports = async function handler(req, res) {
     return;
   }
 
+  const startedMono = Date.now();
+  let gatewayContext = null;
+  let gatewayDecision = null;
+  let gatewayReported = false;
+
   try {
     const user = await requireAuth(req, res);
     if (!user) return;
@@ -43,6 +49,31 @@ module.exports = async function handler(req, res) {
 
     if (!token || !botId) {
       sendJson(res, 500, { error: "服务端缺少 COZE_API_TOKEN 或 COZE_BOT_ID" });
+      return;
+    }
+
+    gatewayContext = makeGatewayContext({
+      user,
+      featureKey: "coze_chat",
+      endpointKey: "POST /api/chat",
+      providerCode: "coze_chat",
+      modelName: botId,
+      costClass: "llm_chat",
+      highCost: true,
+      description: "Coze Agent 流式聊天",
+      metadata: {
+        conversation_id: conversationId || null,
+        message_chars: message.length,
+      },
+    });
+    try {
+      gatewayDecision = await checkGateway(gatewayContext);
+    } catch (error) {
+      if (error.retryAfterSeconds) res.setHeader("Retry-After", String(error.retryAfterSeconds));
+      sendJson(res, error.statusCode || 503, {
+        error: "网关限制：Coze 调用暂不可用",
+        detail: error.gateway || error.message,
+      });
       return;
     }
 
@@ -74,6 +105,17 @@ module.exports = async function handler(req, res) {
 
     if (!cozeRes.ok) {
       const detail = await cozeRes.text();
+      await reportGateway(
+        { ...gatewayContext, ...(gatewayDecision || {}) },
+        {
+          status: "failed",
+          latencyMs: Date.now() - startedMono,
+          errorCode: String(cozeRes.status),
+          errorMessage: detail.slice(0, 500),
+          metadata: { upstream_status: cozeRes.status },
+        },
+      );
+      gatewayReported = true;
       sendJson(res, cozeRes.status, {
         error: `Coze API 错误: ${cozeRes.status}`,
         detail,
@@ -99,8 +141,32 @@ module.exports = async function handler(req, res) {
     }
 
     res.end();
+    await reportGateway(
+      { ...gatewayContext, ...(gatewayDecision || {}) },
+      {
+        status: "success",
+        latencyMs: Date.now() - startedMono,
+        metadata: { stream: true },
+      },
+    );
+    gatewayReported = true;
   } catch (err) {
-    sendJson(res, 500, {
+    if (gatewayContext && !gatewayReported) {
+      await reportGateway(
+        { ...gatewayContext, ...(gatewayDecision || {}) },
+        {
+          status: "failed",
+          latencyMs: Date.now() - startedMono,
+          errorCode: "request_exception",
+          errorMessage: err instanceof Error ? err.message : String(err),
+        },
+      );
+    }
+    if (res.headersSent) {
+      res.end();
+      return;
+    }
+    sendJson(res, err.statusCode || 500, {
       error: "服务器内部错误",
       detail: err instanceof Error ? err.message : String(err),
     });

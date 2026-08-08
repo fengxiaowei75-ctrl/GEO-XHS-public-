@@ -41,11 +41,17 @@ import { SectionHeader } from "../components/layout/SectionHeader";
 import { ViewErrorBoundary } from "../components/layout/ViewErrorBoundary";
 import { SelectControl } from "../components/form/SelectControl";
 import { SegmentedControl } from "../components/form/SegmentedControl";
+import { ImageEditPanel } from "../components/workflows/ImageEditPanel";
+import { ImagePreviewModal } from "../components/workflows/ImagePreviewModal";
+import { ImageWorkflowField } from "../components/workflows/ImageWorkflowField";
+import { WorkflowSteps } from "../components/workflows/WorkflowSteps";
 import { chartColors } from "../constants/chartColors";
 import { navItems } from "../constants/navConfig";
 import { modelProviderTypes } from "../constants/providerLabels";
 import { useAuth } from "../hooks/useAuth";
 import { useDashboardData } from "../hooks/useDashboardData";
+import { useDraftReview } from "../hooks/useDraftReview";
+import { useImageGeneration } from "../hooks/useImageGeneration";
 import { requestJson } from "../hooks/useRequestJson";
 import {
   activeEndataPeriod,
@@ -782,19 +788,6 @@ function compactSocialDraft(draft) {
   };
 }
 
-function ImageWorkflowField({ label, value, onChange, multiline = true, placeholder = "", rows = 4 }) {
-  return (
-    <label className="image-workflow-field">
-      <span>{label}</span>
-      {multiline ? (
-        <textarea rows={rows} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
-      ) : (
-        <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
-      )}
-    </label>
-  );
-}
-
 function ImageGenerationWorkflow({ data }) {
   const noteRows = data?.contentInsight?.noteAnalysis || [];
   const initialHistory = useMemo(() => readImageWorkflowHistory(), []);
@@ -815,11 +808,18 @@ function ImageGenerationWorkflow({ data }) {
   const [historyItems, setHistoryItems] = useState(initialHistory);
   const [promptOpen, setPromptOpen] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
-  const [editingSlot, setEditingSlot] = useState(null);
-  const [editingSourceImage, setEditingSourceImage] = useState(null);
-  const [editInstruction, setEditInstruction] = useState("");
-  const [editImageCount, setEditImageCount] = useState("1");
   const [editingImage, setEditingImage] = useState(false);
+  const {
+    editingSlot,
+    editingSourceImage,
+    editInstruction,
+    editImageCount,
+    setEditingSlot,
+    setEditInstruction,
+    setEditImageCount,
+    openImageEdit,
+    resetImageEdit,
+  } = useImageGeneration({ onOpen: () => setMessage("") });
   const noteOptions = useMemo(
     () =>
       noteRows.slice(0, 300).map((item) => ({
@@ -881,10 +881,7 @@ function ImageGenerationWorkflow({ data }) {
     setSocialPlatform(item.socialPlatform || item.socialDraft?.platform || "xhs");
     setSocialDraft(item.socialDraft || null);
     setNoteDetail(item.noteDetail || null);
-    setEditingSlot(null);
-    setEditingSourceImage(null);
-    setEditInstruction("");
-    setEditImageCount("1");
+    resetImageEdit();
     setMessage("已恢复历史产出");
     setSocialMessage(item.socialDraft?.content ? "已恢复历史社媒草稿" : "");
   }
@@ -920,14 +917,6 @@ function ImageGenerationWorkflow({ data }) {
     } finally {
       setLoadingNote(false);
     }
-  }
-
-  function openImageEdit(slot, sourceImage = null) {
-    setEditingSlot(slot);
-    setEditingSourceImage(sourceImage);
-    setEditInstruction("");
-    setEditImageCount("1");
-    setMessage("");
   }
 
   async function editGeneratedImage(event) {
@@ -1017,10 +1006,7 @@ function ImageGenerationWorkflow({ data }) {
       const nextResult = appendEditedImages(result, slot, editResult, editImages.slice(0, editCount), instruction, Date.now() - startedAt);
       setResult(nextResult);
       persistHistoryItem(nextResult);
-      setEditingSlot(null);
-      setEditingSourceImage(null);
-      setEditInstruction("");
-      setEditImageCount("1");
+      resetImageEdit();
       setMessage(payload.logWarning ? `第${slot}张已改图，监控日志写入提示：${payload.logWarning}` : `第${slot}张已改图并写入监控日志`);
     } catch (error) {
       setMessage(error.message);
@@ -1041,8 +1027,7 @@ function ImageGenerationWorkflow({ data }) {
     setGenerating(true);
     setMessage("");
     setResult(null);
-    setEditingSlot(null);
-    setEditInstruction("");
+    resetImageEdit();
     try {
       const payload = await requestJson("/api/image-generate", {
         method: "POST",
@@ -1378,12 +1363,7 @@ function ImageGenerationWorkflow({ data }) {
               <button
                 className="copy-button"
                 type="button"
-                onClick={() => {
-                  setEditingSlot(null);
-                  setEditingSourceImage(null);
-                  setEditInstruction("");
-                  setEditImageCount("1");
-                }}
+                onClick={resetImageEdit}
                 disabled={editingImage}
               >
                 取消
@@ -1644,12 +1624,23 @@ function FixedContentFlow({ data }) {
   const [fixedResult, setFixedResult] = useState(null);
   const [resultOpen, setResultOpen] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
-  const [editingSlot, setEditingSlot] = useState(null);
-  const [editingSourceImage, setEditingSourceImage] = useState(null);
-  const [editInstruction, setEditInstruction] = useState("");
-  const [editImageCount, setEditImageCount] = useState("1");
   const [editingImage, setEditingImage] = useState(false);
   const [historyItems, setHistoryItems] = useState(initialHistory);
+  const {
+    editingSlot,
+    editingSourceImage,
+    editInstruction,
+    editImageCount,
+    setEditingSlot,
+    setEditInstruction,
+    setEditImageCount,
+    openImageEdit: openFixedImageEdit,
+    resetImageEdit: resetFixedImageEdit,
+  } = useImageGeneration({
+    onOpen: (slot) => {
+      setProgress((current) => ({ ...current, message: `准备修改第${slot}张图` }));
+    },
+  });
 
   const selectedLine = lines.find((line) => line.id === selectedLineId) || lines[0] || fixedContentLineConfigs[0];
   const visibleNotes = selectedLine.notes || [];
@@ -1765,10 +1756,7 @@ function FixedContentFlow({ data }) {
       lineShortTitle: item.lineShortTitle || selectedLine.shortTitle,
     });
     setResultOpen(true);
-    setEditingSlot(null);
-    setEditingSourceImage(null);
-    setEditInstruction("");
-    setEditImageCount("1");
+    resetFixedImageEdit();
     setProgress({ status: "done", activeStep: 4, message: "已恢复历史草稿" });
   }
 
@@ -1904,14 +1892,6 @@ function FixedContentFlow({ data }) {
     }
   }
 
-  function openFixedImageEdit(slot, sourceImage = null) {
-    setEditingSlot(slot);
-    setEditingSourceImage(sourceImage);
-    setEditInstruction("");
-    setEditImageCount("1");
-    setProgress((current) => ({ ...current, message: `准备修改第${slot}张图` }));
-  }
-
   async function editFixedGeneratedImage(event) {
     event.preventDefault();
     const slot = normalizeWorkflowImageCount(editingSlot);
@@ -2005,10 +1985,7 @@ function FixedContentFlow({ data }) {
       };
       setFixedResult(nextFixedResult);
       persistFixedHistoryItem(nextFixedResult, fixedResult.socialDraft);
-      setEditingSlot(null);
-      setEditingSourceImage(null);
-      setEditInstruction("");
-      setEditImageCount("1");
+      resetImageEdit();
       setProgress({ status: "done", activeStep: 4, message: `第${slot}张已改图` });
     } catch (error) {
       setProgress({ status: "failed", activeStep: Math.min(progress.activeStep || 0, fixedRewriteSteps.length - 1), message: error.message || "改图失败" });
@@ -2133,19 +2110,9 @@ function FixedContentFlow({ data }) {
                 <form className="image-edit-panel" onSubmit={editFixedGeneratedImage}>
                   <div className="image-edit-head">
                     <strong>{imageVersionLabel(editingSourceImage || { slot: editingSlot })}</strong>
-                    <button
-                      className="copy-button"
-                      type="button"
-                    onClick={() => {
-                        setEditingSlot(null);
-                        setEditingSourceImage(null);
-                        setEditInstruction("");
-                        setEditImageCount("1");
-                      }}
-                      disabled={editingImage}
-                    >
-                      取消
-                    </button>
+                      <button className="copy-button" type="button" onClick={resetFixedImageEdit} disabled={editingImage}>
+                        取消
+                      </button>
                   </div>
                   <textarea
                     value={editInstruction}
@@ -2414,9 +2381,8 @@ function FixedContentFlow({ data }) {
 }
 
 function DraftReviewFlow({ data, onNavigate }) {
-  const initialDrafts = useMemo(() => readReviewDrafts(), []);
-  const [drafts, setDrafts] = useState(initialDrafts);
-  const [selectedReviewId, setSelectedReviewId] = useState(() => initialDrafts[0]?.reviewId || "");
+  const { drafts, persistDraft: persistReviewDraft } = useDraftReview(readReviewDrafts, writeReviewDraftItem, imageWorkflowHistoryUpdatedEvent, fixedContentHistoryUpdatedEvent);
+  const [selectedReviewId, setSelectedReviewId] = useState(() => drafts[0]?.reviewId || "");
   const [noteDetail, setNoteDetail] = useState(null);
   const [loadingNoteDetail, setLoadingNoteDetail] = useState(false);
   const [detailMessage, setDetailMessage] = useState("");
@@ -2425,24 +2391,8 @@ function DraftReviewFlow({ data, onNavigate }) {
   const [savingDraft, setSavingDraft] = useState(false);
   const [editingSocial, setEditingSocial] = useState(false);
   const [socialEditInstruction, setSocialEditInstruction] = useState("");
-  const [editingSlot, setEditingSlot] = useState(null);
-  const [editingSourceImage, setEditingSourceImage] = useState(null);
-  const [editInstruction, setEditInstruction] = useState("");
-  const [editImageCount, setEditImageCount] = useState("1");
   const [editingImage, setEditingImage] = useState(false);
   const emptyDraftHint = "当前没有待审核草稿。先跑一次固定内容流或爆文洗稿流，历史会自动出现在这里。";
-
-  useEffect(() => {
-    function syncDrafts() {
-      setDrafts(readReviewDrafts());
-    }
-    window.addEventListener(imageWorkflowHistoryUpdatedEvent, syncDrafts);
-    window.addEventListener(fixedContentHistoryUpdatedEvent, syncDrafts);
-    return () => {
-      window.removeEventListener(imageWorkflowHistoryUpdatedEvent, syncDrafts);
-      window.removeEventListener(fixedContentHistoryUpdatedEvent, syncDrafts);
-    };
-  }, []);
 
   useEffect(() => {
     if (!drafts.length) {
@@ -2504,29 +2454,13 @@ function DraftReviewFlow({ data, onNavigate }) {
   }, [selectedNoteId]);
 
   function persistDraft(nextDraft) {
-    const normalized = writeReviewDraftItem(nextDraft);
-    setDrafts(readReviewDrafts());
+    const normalized = persistReviewDraft(nextDraft);
     setSelectedReviewId(normalized.reviewId);
     return normalized;
   }
 
   function updateProgress(activeStep, message, status = "running") {
     setProgress({ status, activeStep, message });
-  }
-
-  function resetImageEdit() {
-    setEditingSlot(null);
-    setEditingSourceImage(null);
-    setEditInstruction("");
-    setEditImageCount("1");
-  }
-
-  function openImageEdit(slot, sourceImage = null) {
-    setEditingSlot(slot);
-    setEditingSourceImage(sourceImage);
-    setEditInstruction("");
-    setEditImageCount("1");
-    updateProgress(2, `准备修改第${slot}张图`);
   }
 
   async function regenerateSocialDraft(event) {

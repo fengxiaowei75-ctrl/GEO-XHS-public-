@@ -1,5 +1,6 @@
 const { Pool } = require("pg");
 const { requireAuth } = require("./_auth");
+const { checkGateway, makeGatewayContext, reportGateway } = require("./_gateway");
 
 const PROVIDER_CODE = "duomi_image_generation";
 const DEFAULT_TASK_API_URL = "https://duomiapi.com/v1/tasks";
@@ -229,6 +230,9 @@ module.exports = async function handler(req, res) {
   const startedAt = new Date();
   const startedMono = Date.now();
   let client = null;
+  let gatewayContext = null;
+  let gatewayDecision = null;
+  let gatewayReported = false;
 
   try {
     const user = await requireAuth(req, res, "content");
@@ -249,6 +253,29 @@ module.exports = async function handler(req, res) {
     const endpoint = taskUrlFor(taskId);
     const parsedEndpoint = new URL(endpoint);
     const model = process.env.IMAGE_GENERATION_MODEL || DEFAULT_IMAGE_MODEL;
+    gatewayContext = makeGatewayContext({
+      user,
+      featureKey: "image_task_polling",
+      endpointKey: "GET /api/image-task",
+      providerCode: "domi_image_generation",
+      modelName: model,
+      costClass: "external_api",
+      highCost: false,
+      description: "Domi 图片任务状态查询",
+      metadata: { task_id: taskId },
+    });
+    try {
+      gatewayDecision = await checkGateway(gatewayContext);
+    } catch (error) {
+      if (error.retryAfterSeconds) res.setHeader("Retry-After", String(error.retryAfterSeconds));
+      sendJson(res, error.statusCode || 503, {
+        ok: false,
+        error: "网关限制：图片任务查询暂不可用",
+        detail: error.gateway || error.message,
+      });
+      return;
+    }
+
     const dbPool = getPool();
     if (dbPool) client = await dbPool.connect();
     const modelConfig = await lookupModelConfig(client, model);
@@ -289,10 +316,28 @@ module.exports = async function handler(req, res) {
         task_status: status,
         image_count: images.length,
         user_id: user.user_id,
+        gateway_request_id: gatewayDecision?.requestId || gatewayContext.requestId,
+        gateway_policy_id: gatewayDecision?.policyId || null,
       },
     });
 
     if (!providerRes.ok) {
+      await reportGateway(
+        { ...gatewayContext, ...(gatewayDecision || {}) },
+        {
+          status: "failed",
+          latencyMs,
+          imageCount: images.length,
+          errorCode: String(payload?.error?.code || payload?.code || providerRes.status),
+          errorMessage: String(payload?.error?.message || payload?.message || responseText).slice(0, 500),
+          metadata: {
+            task_id: taskId,
+            task_status: status,
+            upstream_status: providerRes.status,
+          },
+        },
+      );
+      gatewayReported = true;
       sendJson(res, providerRes.status, {
         ok: false,
         error: payload?.error?.message || payload?.message || "图像生成任务查询失败",
@@ -301,6 +346,22 @@ module.exports = async function handler(req, res) {
       });
       return;
     }
+
+    await reportGateway(
+      { ...gatewayContext, ...(gatewayDecision || {}) },
+      {
+        status: "success",
+        latencyMs,
+        imageCount: images.length,
+        metadata: {
+          task_id: taskId,
+          task_status: status,
+          image_count: images.length,
+          upstream_status: providerRes.status,
+        },
+      },
+    );
+    gatewayReported = true;
 
     sendJson(res, 200, {
       ok: true,
@@ -312,6 +373,17 @@ module.exports = async function handler(req, res) {
       logWarning,
     });
   } catch (error) {
+    if (gatewayContext && !gatewayReported) {
+      await reportGateway(
+        { ...gatewayContext, ...(gatewayDecision || {}) },
+        {
+          status: "failed",
+          latencyMs: Date.now() - startedMono,
+          errorCode: "request_exception",
+          errorMessage: error.message,
+        },
+      );
+    }
     sendJson(res, error.statusCode || 500, { ok: false, error: error.message || "图像生成任务查询失败" });
   } finally {
     if (client) client.release();

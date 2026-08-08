@@ -34,9 +34,12 @@ PGDATABASE=xhs_geo
 PGUSER=app_user
 PGPASSWORD=<数据库密码>
 PGSSLMODE=
+GATEWAY_BASE_URL=https://<gateway-public-domain>
+GATEWAY_SERVICE_TOKEN=<gateway-monitor 服务 token>
 ```
 
 不要把 `PGPASSWORD` 提交到代码仓库。
+`GATEWAY_SERVICE_TOKEN` 也不要提交到代码仓库；生产环境缺少网关变量时，高成本接口会失败关闭。
 
 ## Deploy
 

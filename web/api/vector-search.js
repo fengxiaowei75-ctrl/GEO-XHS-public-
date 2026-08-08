@@ -1,5 +1,6 @@
 const { Pool } = require("pg");
 const { requireAuth } = require("./_auth");
+const { checkGateway, makeGatewayContext, reportGateway } = require("./_gateway");
 
 let pool;
 
@@ -69,6 +70,11 @@ module.exports = async function handler(req, res) {
     return;
   }
 
+  const startedMono = Date.now();
+  let gatewayContext = null;
+  let gatewayDecision = null;
+  let gatewayReported = false;
+
   try {
     const user = await requireAuth(req, res, "content");
     if (!user) return;
@@ -94,6 +100,32 @@ module.exports = async function handler(req, res) {
       return;
     }
 
+    gatewayContext = makeGatewayContext({
+      user,
+      featureKey: "vector_search",
+      endpointKey: "POST /api/vector-search",
+      providerCode: "volcengine_ark_embedding",
+      modelName: embeddingModel,
+      costClass: "embedding",
+      highCost: true,
+      description: "Ark Embedding + pgvector 内容资产检索",
+      metadata: {
+        query_chars: query.length,
+        limit: normalizeLimit(limit),
+      },
+    });
+    try {
+      gatewayDecision = await checkGateway(gatewayContext);
+    } catch (error) {
+      if (error.retryAfterSeconds) res.setHeader("Retry-After", String(error.retryAfterSeconds));
+      sendJson(res, error.statusCode || 503, {
+        success: false,
+        error: "网关限制：向量检索暂不可用",
+        detail: error.gateway || error.message,
+      });
+      return;
+    }
+
     const embeddingRes = await fetch(embeddingUrl, {
       method: "POST",
       headers: {
@@ -108,6 +140,17 @@ module.exports = async function handler(req, res) {
 
     if (!embeddingRes.ok) {
       const detail = await embeddingRes.text();
+      await reportGateway(
+        { ...gatewayContext, ...(gatewayDecision || {}) },
+        {
+          status: "failed",
+          latencyMs: Date.now() - startedMono,
+          errorCode: String(embeddingRes.status),
+          errorMessage: detail.slice(0, 500),
+          metadata: { upstream_status: embeddingRes.status },
+        },
+      );
+      gatewayReported = true;
       sendJson(res, 500, {
         success: false,
         error: `Embedding API 错误: ${embeddingRes.status}`,
@@ -117,12 +160,26 @@ module.exports = async function handler(req, res) {
     }
 
     const embeddingData = await embeddingRes.json();
+    const usage = embeddingData?.usage && typeof embeddingData.usage === "object" ? embeddingData.usage : {};
+    const totalTokens = Number(usage.total_tokens || usage.totalTokens || usage.prompt_tokens || usage.input_tokens || 0) || 0;
     const embeddingPayload = embeddingData?.data;
     const queryVector = Array.isArray(embeddingPayload)
       ? embeddingPayload[0]?.embedding
       : embeddingPayload?.embedding;
 
     if (!Array.isArray(queryVector) || !queryVector.length) {
+      await reportGateway(
+        { ...gatewayContext, ...(gatewayDecision || {}) },
+        {
+          status: "failed",
+          latencyMs: Date.now() - startedMono,
+          totalTokens,
+          errorCode: "missing_embedding_vector",
+          errorMessage: "Embedding API 未返回有效向量",
+          metadata: { usage },
+        },
+      );
+      gatewayReported = true;
       sendJson(res, 500, { success: false, error: "Embedding API 未返回有效向量" });
       return;
     }
@@ -156,6 +213,20 @@ module.exports = async function handler(req, res) {
     `;
 
     const result = await dbPool.query(sql, [vectorStr, normalizeLimit(limit)]);
+    await reportGateway(
+      { ...gatewayContext, ...(gatewayDecision || {}) },
+      {
+        status: "success",
+        latencyMs: Date.now() - startedMono,
+        totalTokens,
+        metadata: {
+          row_count: result.rowCount,
+          result_limit: normalizeLimit(limit),
+          usage,
+        },
+      },
+    );
+    gatewayReported = true;
 
     sendJson(res, 200, {
       success: true,
@@ -164,6 +235,17 @@ module.exports = async function handler(req, res) {
       rowCount: result.rowCount,
     });
   } catch (err) {
+    if (gatewayContext && !gatewayReported) {
+      await reportGateway(
+        { ...gatewayContext, ...(gatewayDecision || {}) },
+        {
+          status: "failed",
+          latencyMs: Date.now() - startedMono,
+          errorCode: "request_exception",
+          errorMessage: err instanceof Error ? err.message : String(err),
+        },
+      );
+    }
     sendJson(res, 500, {
       success: false,
       error: err instanceof Error ? err.message : String(err),
