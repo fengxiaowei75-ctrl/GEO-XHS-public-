@@ -1,10 +1,31 @@
-name: Deploy to Server
+name: CI/CD Pipeline
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
 jobs:
+  # ===== CI 环节：构建验证 =====
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 安装前端依赖并构建
+        run: |
+          cd web
+          npm ci
+          npm run build
+
+  # ===== CD 环节：部署 =====
   deploy:
+    needs: build  # ← 构建通过后才部署
     runs-on: ubuntu-latest
     steps:
       - name: Deploy via SSH
