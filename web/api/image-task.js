@@ -257,11 +257,11 @@ module.exports = async function handler(req, res) {
       user,
       featureKey: "image_task_polling",
       endpointKey: "GET /api/image-task",
-      providerCode: "domi_image_generation",
+      providerCode: "duomi_image_generation",
       modelName: model,
       costClass: "external_api",
       highCost: false,
-      description: "Domi 图片任务状态查询",
+      description: "多米图片任务状态查询",
       metadata: { task_id: taskId },
     });
     try {

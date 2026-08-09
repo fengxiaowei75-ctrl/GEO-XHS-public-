@@ -433,11 +433,11 @@ module.exports = async function handler(req, res) {
         user,
         featureKey: "image_generation",
         endpointKey: "POST /api/image-generate",
-        providerCode: "domi_image_generation",
+        providerCode: "duomi_image_generation",
         modelName: model,
         costClass: "image_generation",
         highCost: true,
-        description: "Domi 图片生成/改图任务提交",
+        description: "多米图片生成/改图任务提交",
         metadata: {
           slot,
           image_count_requested: imageCount,

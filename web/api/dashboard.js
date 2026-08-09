@@ -418,7 +418,30 @@ function sampleData() {
       },
       modelConfigs: [],
       credentials: [],
-      rateLimitRules: [],
+      rateLimitRules: [
+        {
+          rule_id: 1,
+          provider_code: "endata_xhs_note_detail",
+          rule_name: "艺恩详情 API 每日调用上限",
+          period_seconds: 86400,
+          max_calls: 300,
+          max_tokens: null,
+          max_estimated_cost: null,
+          hard_block: true,
+          is_enabled: true,
+        },
+        {
+          rule_id: 2,
+          provider_code: "duomi_image_generation",
+          rule_name: "多米图片生成每日调用上限",
+          period_seconds: 86400,
+          max_calls: 100,
+          max_tokens: null,
+          max_estimated_cost: null,
+          hard_block: true,
+          is_enabled: true,
+        },
+      ],
     },
   };
 }

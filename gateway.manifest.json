@@ -45,13 +45,13 @@
     {
       "feature_key": "image_generation",
       "display_name": "图片生成",
-      "description": "调用多米/Domi 提交小红书图片生成或改图任务",
+      "description": "调用多米提交小红书图片生成或改图任务",
       "cost_class": "image_generation"
     },
     {
       "feature_key": "image_task_polling",
       "display_name": "图片任务轮询",
-      "description": "查询 Domi 图片生成任务状态",
+      "description": "查询多米图片生成任务状态",
       "cost_class": "external_api"
     },
     {
@@ -198,7 +198,7 @@
       "cost_class": "image_generation",
       "high_cost": true,
       "default_policy_key": "image_generation_standard",
-      "description": "Domi 图片生成/改图任务提交"
+      "description": "多米图片生成/改图任务提交"
     },
     {
       "endpoint_key": "GET /api/image-task",
@@ -210,7 +210,7 @@
       "cost_class": "external_api",
       "high_cost": false,
       "default_policy_key": "task_polling_standard",
-      "description": "Domi 图片任务状态查询"
+      "description": "多米图片任务状态查询"
     },
     {
       "endpoint_key": "POST /api/image-note",
@@ -279,9 +279,9 @@
       "billing_unit": "token"
     },
     {
-      "provider_code": "domi_image_generation",
+      "provider_code": "duomi_image_generation",
       "provider_type": "image_generation",
-      "display_name": "Domi 图片生成",
+      "display_name": "多米图片生成",
       "billable": true,
       "billing_unit": "image"
     },
@@ -308,4 +308,3 @@
     }
   ]
 }
-
