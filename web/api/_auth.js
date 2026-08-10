@@ -383,6 +383,7 @@ module.exports = {
   permissionCatalog,
   readJsonBody,
   requireAuth,
+  withAuthClient,
   saveUser,
   sendJson,
   sessionCookie,

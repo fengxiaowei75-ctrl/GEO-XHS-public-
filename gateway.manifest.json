@@ -25,6 +25,12 @@
       "cost_class": "db_write"
     },
     {
+      "feature_key": "rate_limit_admin",
+      "display_name": "限流规则管理",
+      "description": "管理员调整艺恩和多米等外部 API 的调用上限",
+      "cost_class": "db_write"
+    },
+    {
       "feature_key": "db_query",
       "display_name": "管理员只读查询",
       "description": "管理员通过只读数据库账号执行受限 SELECT 查询",
@@ -151,6 +157,18 @@
       "high_cost": false,
       "default_policy_key": "admin_write_strict",
       "description": "管理员创建或更新账号"
+    },
+    {
+      "endpoint_key": "POST /api/admin/rate-limit-rules",
+      "method": "POST",
+      "path": "/api/admin/rate-limit-rules",
+      "source_file": "web/api/admin/rate-limit-rules.js",
+      "feature_key": "rate_limit_admin",
+      "auth_required": "admin",
+      "cost_class": "db_write",
+      "high_cost": false,
+      "default_policy_key": "rate_limit_admin_write_strict",
+      "description": "管理员调整限流规则上限"
     },
     {
       "endpoint_key": "POST /api/db-query",

@@ -90,7 +90,20 @@ export default function App() {
           {dashboard.error ? <div className="notice notice-error"><AlertTriangle size={16} />{dashboard.error}</div> : null}
           <ViewErrorBoundary resetKey={activeView} onNavigate={setActiveView}>
             <Suspense fallback={<ViewLoading />}>
-              <View data={dashboard.data} loading={dashboard.loading} filter={filter} contentStart={contentStart} contentEnd={contentEnd} onContentRangeApply={handleContentRangeApply} apiDate={apiDate} onApiDateChange={setApiDate} onNavigate={setActiveView} currentUser={auth.user} permissionCatalog={auth.permissionCatalog} />
+              <View
+                data={dashboard.data}
+                loading={dashboard.loading}
+                filter={filter}
+                contentStart={contentStart}
+                contentEnd={contentEnd}
+                onContentRangeApply={handleContentRangeApply}
+                apiDate={apiDate}
+                onApiDateChange={setApiDate}
+                onNavigate={setActiveView}
+                currentUser={auth.user}
+                permissionCatalog={auth.permissionCatalog}
+                onRefresh={dashboard.loadDashboard}
+              />
             </Suspense>
           </ViewErrorBoundary>
         </main>

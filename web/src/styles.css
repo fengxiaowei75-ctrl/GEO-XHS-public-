@@ -2210,6 +2210,47 @@ tbody tr:hover {
   font-size: 18px;
 }
 
+.rate-limit-message {
+  min-height: 20px;
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.rate-limit-message.green {
+  color: var(--green);
+}
+
+.rate-limit-message.red {
+  color: var(--red);
+}
+
+.rate-limit-editor {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.rate-limit-input {
+  width: 124px;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  text-align: right;
+}
+
+.rate-limit-input:disabled {
+  background: #f7f8f6;
+  color: var(--muted);
+}
+
 .metric-button {
   min-height: 28px;
   padding: 3px 8px;
