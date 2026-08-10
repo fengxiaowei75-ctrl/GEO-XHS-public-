@@ -6,7 +6,7 @@ import { InsightNoteTable, PersonaPieChart, TopicFrequencyList } from "../compon
 import { WordCloudPanel } from "../components/content/ContentInsightWordCloud";
 import { StatusPill } from "../components/data/StatusPill";
 import { SectionHeader } from "../components/layout/SectionHeader";
-import { arrayText, formatNumber, formatPercent } from "../utils/formatters";
+import { arrayText, formatNumber } from "../utils/formatters";
 import { dateKeyFromValue, formatDayLabel, noteDateKey, rangeForLastDays, todayInputValue } from "../utils/dates";
 
 function insightSearchText(item) {
@@ -101,14 +101,6 @@ export function ContentInsightView({ data, loading, filter, contentStart, conten
     () => selectedDayNotes.find((item) => item.note_id === selectedNoteId) || null,
     [selectedDayNotes, selectedNoteId],
   );
-  const topInteractionNote = useMemo(
-    () =>
-      noteRows.reduce((best, item) => {
-        if (!best) return item;
-        return Number(item.interaction_score || 0) > Number(best.interaction_score || 0) ? item : best;
-      }, null),
-    [noteRows],
-  );
 
   useEffect(() => {
     if (selectedNoteId && !selectedNote) setSelectedNoteId("");
@@ -121,8 +113,6 @@ export function ContentInsightView({ data, loading, filter, contentStart, conten
     : "无数据";
   const activeRangeLabel =
     contentStart || contentEnd ? `${contentStart || "最早"} - ${contentEnd || "今天"}` : "累计";
-  const topTopic = topicRows[0] || null;
-  const topPersona = personaRows[0] || null;
 
   function applyQuickRange(days) {
     const maxNoteDate = /^\d{4}-\d{2}-\d{2}/.test(String(rangeEnd || "")) ? String(rangeEnd).slice(0, 10) : "";
@@ -134,42 +124,16 @@ export function ContentInsightView({ data, loading, filter, contentStart, conten
 
   return (
     <>
-      <section className="content-section content-overview-section">
-        <div className="content-hero-panel">
-          <div className="content-hero-copy">
-            <div className="eyebrow content-hero-eyebrow">
+      <section className="content-section">
+        <div className="content-section-heading">
+          <div>
+            <div className="eyebrow">
               <BarChart3 size={15} />
               Note Data
             </div>
             <h2>笔记数据概览</h2>
-            <p>从主题、人群、趋势和单篇明细逐层定位正在放大的需求信号。</p>
-            <div className="content-hero-tags">
-              <StatusPill tone={loading && !data ? "blue" : "neutral"}>{loading && !data ? "加载中" : `当前筛选 ${activeRangeLabel}`}</StatusPill>
-              <StatusPill tone="green">总互动 {formatNumber(overview.interactionTotal)}</StatusPill>
-              <StatusPill tone="blue">数据范围 {rangeMeta}</StatusPill>
-            </div>
           </div>
-          <div className="content-hero-snapshot" aria-label="周期摘要">
-            <article className="content-hero-tile">
-              <span>主主题</span>
-              <strong>{topTopic?.core_topic_category || "暂无主题"}</strong>
-              <small>{topTopic ? `${formatNumber(topTopic.note_count)} 篇 · ${formatPercent(topTopic.share_pct)}` : "暂无数据"}</small>
-            </article>
-            <article className="content-hero-tile">
-              <span>核心人群</span>
-              <strong>{topPersona?.primary_target_persona || "暂无人群"}</strong>
-              <small>{topPersona ? `${formatNumber(topPersona.note_count)} 篇 · ${formatPercent(topPersona.share_pct)}` : "暂无数据"}</small>
-            </article>
-            <article className="content-hero-tile content-hero-tile-wide">
-              <span>高互动笔记</span>
-              <strong>{topInteractionNote?.title || "暂无笔记"}</strong>
-              <small>
-                {topInteractionNote
-                  ? `${formatNumber(topInteractionNote.interaction_score)} 互动 · ${formatDayLabel(topInteractionNote.note_date || topInteractionNote.publish_time)}`
-                  : "暂无数据"}
-              </small>
-            </article>
-          </div>
+          <StatusPill tone="neutral">当前筛选 {activeRangeLabel}</StatusPill>
         </div>
 
         <section className="panel content-range-panel">
