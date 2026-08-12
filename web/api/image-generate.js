@@ -1,10 +1,8 @@
 const { Pool } = require("pg");
 const { requireAuth } = require("./_auth");
-const { checkGateway, makeGatewayContext, reportGateway } = require("./_gateway");
+const { makeGatewayContext, proxyProvider } = require("./_gateway");
 
 const PROVIDER_CODE = "duomi_image_generation";
-const DEFAULT_IMAGE_API_URL = "https://duomiapi.com/v1/images/generations";
-const DEFAULT_TASK_API_URL = "https://duomiapi.com/v1/tasks";
 const DEFAULT_IMAGE_MODEL = "gpt-image-2";
 const MAX_IMAGE_COUNT = 10;
 const MAX_GLOBAL_PROMPT_CHARS = 5000;
@@ -270,20 +268,6 @@ function extractTaskId(payload) {
   return cleanText(candidates.find(Boolean), 160);
 }
 
-function taskUrlFor(taskId) {
-  const base = process.env.IMAGE_GENERATION_TASK_API_URL || DEFAULT_TASK_API_URL;
-  if (base.includes("{id}")) return base.replace("{id}", encodeURIComponent(taskId));
-  return `${base.replace(/\/$/, "")}/${encodeURIComponent(taskId)}`;
-}
-
-function imageProviderHeaders(apiKey) {
-  const prefix = cleanText(process.env.IMAGE_GENERATION_AUTH_PREFIX, 32);
-  return {
-    Authorization: prefix ? `${prefix} ${apiKey}` : apiKey,
-    "Content-Type": "application/json",
-  };
-}
-
 function appendReferenceImage(requestBody, referenceImage) {
   if (!referenceImage) return false;
   const field = cleanText(process.env.IMAGE_GENERATION_REFERENCE_FIELD, 64) || "image";
@@ -378,16 +362,12 @@ module.exports = async function handler(req, res) {
   const startedMono = Date.now();
   let client = null;
   let activeGatewayContext = null;
-  let activeGatewayDecision = null;
-  let activeGatewayReported = false;
 
   try {
     const user = await requireAuth(req, res, "content");
     if (!user) return;
 
     const input = await readJsonBody(req);
-    const apiKey = process.env.IMAGE_GENERATION_API_KEY;
-    const apiUrl = process.env.IMAGE_GENERATION_API_URL || DEFAULT_IMAGE_API_URL;
     const model = process.env.IMAGE_GENERATION_MODEL || DEFAULT_IMAGE_MODEL;
     const size = cleanText(input.size, 32) || process.env.IMAGE_GENERATION_SIZE || "1024x1024";
     const imageCount = normalizeImageCount(input.imageCount);
@@ -400,10 +380,6 @@ module.exports = async function handler(req, res) {
     const operation = workflowAction === "image_edit" ? "image_generation_edit_task" : "image_generation_create_task";
     const editSlot = Number(input.editSlot || 0) || null;
 
-    if (!apiKey) {
-      sendJson(res, 500, { ok: false, error: "服务端缺少 IMAGE_GENERATION_API_KEY" });
-      return;
-    }
     if (!hasImagePrompt(input)) {
       sendJson(res, 400, { ok: false, error: "请填写生图提示词" });
       return;
@@ -417,7 +393,6 @@ module.exports = async function handler(req, res) {
     if (dbPool) client = await dbPool.connect();
     const modelConfig = await lookupModelConfig(client, model);
 
-    const endpoint = new URL(apiUrl);
     const tasks = [];
     const allImages = [];
     const logWarnings = [];
@@ -449,34 +424,30 @@ module.exports = async function handler(req, res) {
           note_id: noteId || null,
         },
       });
-      activeGatewayDecision = null;
-      activeGatewayReported = false;
-      try {
-        activeGatewayDecision = await checkGateway(activeGatewayContext);
-      } catch (error) {
-        if (error.retryAfterSeconds) res.setHeader("Retry-After", String(error.retryAfterSeconds));
-        sendJson(res, error.statusCode || 503, {
-          ok: false,
-          error: "网关限制：图片生成暂不可用",
-          detail: error.gateway || error.message,
-        });
-        return;
-      }
 
-      const providerRes = await fetch(endpoint.toString(), {
-        method: "POST",
-        headers: imageProviderHeaders(apiKey),
-        body: JSON.stringify(requestBody),
-      });
-      const responseText = await providerRes.text();
+      let gatewayResult = null;
+      let providerOk = true;
+      let providerStatus = 200;
+      let payload = {};
+      let responseText = "";
+      try {
+        gatewayResult = await proxyProvider(
+          activeGatewayContext,
+          "duomi",
+          "images_generations",
+          requestBody,
+          { timeoutMs: 120000 },
+        );
+        payload = gatewayResult.data || {};
+        responseText = JSON.stringify(payload);
+      } catch (error) {
+        providerOk = false;
+        providerStatus = error.statusCode || 502;
+        payload = error.payload?.data || error.payload || { error: error.message };
+        responseText = JSON.stringify(payload);
+      }
       const finishedAt = new Date();
       const latencyMs = Date.now() - slotStartedMono;
-      let payload = {};
-      try {
-        payload = responseText ? JSON.parse(responseText) : {};
-      } catch {
-        payload = { raw_text: responseText };
-      }
 
       const images = extractImages(payload).map((image) => ({ ...image, slot }));
       const taskId = extractTaskId(payload);
@@ -485,19 +456,19 @@ module.exports = async function handler(req, res) {
         modelConfigId: modelConfig.model_config_id,
         credentialId: modelConfig.credential_id,
         operation,
-        status: providerRes.ok ? "success" : "failed",
-        requestHost: endpoint.host,
-        requestPath: endpoint.pathname,
-        httpStatus: providerRes.status,
+        status: providerOk ? "success" : "failed",
+        requestHost: "central-api-gateway",
+        requestPath: "/v1/proxy/duomi/images_generations",
+        httpStatus: providerStatus,
         noteId,
         startedAt: slotStartedAt,
         finishedAt,
         latencyMs,
         requestBytes: Buffer.byteLength(JSON.stringify(requestBody)),
         responseBytes: Buffer.byteLength(responseText || ""),
-        estimatedUnits: providerRes.ok ? 1 : 0,
-        errorCode: providerRes.ok ? "" : String(payload?.error?.code || payload?.code || providerRes.status),
-        errorMessage: providerRes.ok ? "" : String(payload?.error?.message || payload?.message || responseText).slice(0, 500),
+        estimatedUnits: providerOk ? 1 : 0,
+        errorCode: providerOk ? "" : String(payload?.error?.code || payload?.code || providerStatus),
+        errorMessage: providerOk ? "" : String(payload?.error?.message || payload?.message || responseText).slice(0, 500),
         rawUsage: { image_count: images.length, task_id: taskId || null, slot, image_count_requested: imageCount, per_image_prompt_count: imagePrompts.length, workflow_action: workflowAction },
         metadata: {
           source: "web_image_generation_workflow",
@@ -506,7 +477,6 @@ module.exports = async function handler(req, res) {
           model,
           size,
           oversea,
-          task_url: taskId ? taskUrlFor(taskId) : null,
           has_reference_image: Boolean(referenceImage),
           reference_image_sent: referenceImageSent,
           prompt_chars: slotPrompt.length,
@@ -516,31 +486,13 @@ module.exports = async function handler(req, res) {
           slot,
           edit_slot: editSlot,
           user_id: user.user_id,
-          gateway_request_id: activeGatewayDecision?.requestId || activeGatewayContext.requestId,
-          gateway_policy_id: activeGatewayDecision?.policyId || null,
+          gateway_request_id: gatewayResult?.request_id || activeGatewayContext.requestId,
         },
       });
       if (logWarning) logWarnings.push(`第${slot}张：${logWarning}`);
 
-      if (!providerRes.ok) {
-        await reportGateway(
-          { ...activeGatewayContext, ...(activeGatewayDecision || {}) },
-          {
-            status: "failed",
-            latencyMs,
-            imageCount: 0,
-            errorCode: String(payload?.error?.code || payload?.code || providerRes.status),
-            errorMessage: String(payload?.error?.message || payload?.message || responseText).slice(0, 500),
-            metadata: {
-              slot,
-              upstream_status: providerRes.status,
-              workflow_action: workflowAction,
-              task_id: taskId || null,
-            },
-          },
-        );
-        activeGatewayReported = true;
-        sendJson(res, providerRes.status, {
+      if (!providerOk) {
+        sendJson(res, providerStatus, {
           ok: false,
           error: payload?.error?.message || payload?.message || `第${slot}张图生成任务创建失败`,
           detail: payload,
@@ -550,22 +502,6 @@ module.exports = async function handler(req, res) {
       }
 
       if (!taskId && !images.length) {
-        await reportGateway(
-          { ...activeGatewayContext, ...(activeGatewayDecision || {}) },
-          {
-            status: "failed",
-            latencyMs,
-            imageCount: 0,
-            errorCode: "missing_task_or_image",
-            errorMessage: "任务创建成功但响应中没有任务 ID 或图片 URL",
-            metadata: {
-              slot,
-              workflow_action: workflowAction,
-              upstream_status: providerRes.status,
-            },
-          },
-        );
-        activeGatewayReported = true;
         sendJson(res, 502, {
           ok: false,
           error: `第${slot}张图任务创建成功，但响应中没有找到任务 ID 或图片 URL`,
@@ -574,24 +510,6 @@ module.exports = async function handler(req, res) {
         });
         return;
       }
-
-      await reportGateway(
-        { ...activeGatewayContext, ...(activeGatewayDecision || {}) },
-        {
-          status: "success",
-          latencyMs,
-          imageCount: 1,
-          metadata: {
-            slot,
-            workflow_action: workflowAction,
-            task_id: taskId || null,
-            image_count: images.length,
-            image_count_requested: imageCount,
-            upstream_status: providerRes.status,
-          },
-        },
-      );
-      activeGatewayReported = true;
 
       tasks.push({ slot, taskId, images });
       allImages.push(...images);
@@ -614,24 +532,12 @@ module.exports = async function handler(req, res) {
   } catch (error) {
     const finishedAt = new Date();
     const latencyMs = Date.now() - startedMono;
-    if (activeGatewayContext && !activeGatewayReported) {
-      await reportGateway(
-        { ...activeGatewayContext, ...(activeGatewayDecision || {}) },
-        {
-          status: "failed",
-          latencyMs,
-          imageCount: 0,
-          errorCode: "request_exception",
-          errorMessage: error.message,
-        },
-      );
-    }
     if (client) {
       await writeApiLog(client, {
         traceId: `web:image-generation:${Date.now()}`,
         status: "failed",
-        requestHost: "duomiapi.com",
-        requestPath: "/v1/images/generations",
+        requestHost: "central-api-gateway",
+        requestPath: "/v1/proxy/duomi/images_generations",
         startedAt,
         finishedAt,
         latencyMs,
@@ -643,9 +549,8 @@ module.exports = async function handler(req, res) {
         rawUsage: {},
         metadata: {
           source: "web_image_generation_workflow",
-          provider: "duomiapi",
-          gateway_request_id: activeGatewayDecision?.requestId || activeGatewayContext?.requestId || null,
-          gateway_policy_id: activeGatewayDecision?.policyId || null,
+          provider: "duomi",
+          gateway_request_id: activeGatewayContext?.requestId || null,
         },
       });
     }

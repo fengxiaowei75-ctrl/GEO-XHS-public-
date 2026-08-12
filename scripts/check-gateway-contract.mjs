@@ -15,23 +15,38 @@ const apiRoots = [
 ];
 
 const apiExtensions = new Set([".js", ".mjs", ".cjs", ".ts"]);
+const sourceExtensions = new Set([".js", ".mjs", ".cjs", ".ts", ".py"]);
 const methods = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+const paidProviderGuards = [
+  {
+    provider: "duomi_image_generation",
+    terms: ["duomiapi.com", "IMAGE_GENERATION_API_URL", "IMAGE_GENERATION_TASK_API_URL"],
+    requestPatterns: ["fetch(", "requests.get(", "requests.post(", "requests.request("],
+    guardPatterns: ["checkGateway(", "ops.call_api(", "call_api("],
+  },
+  {
+    provider: "endata_xhs_note_detail",
+    terms: ["dataapi.endata.com.cn", "ENDATA_BASE_URL", "ENDATA_TOKEN"],
+    requestPatterns: ["fetch(", "requests.get(", "requests.post(", "requests.request("],
+    guardPatterns: ["ops.call_api(", "call_api("],
+  },
+];
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
-function walk(dir) {
+function walk(dir, extensions = apiExtensions, skipPrivateApiFiles = true) {
   if (!fs.existsSync(dir)) return [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      files.push(...walk(fullPath));
+      files.push(...walk(fullPath, extensions, skipPrivateApiFiles));
       continue;
     }
-    if (apiExtensions.has(path.extname(entry.name)) && !entry.name.startsWith("_")) files.push(fullPath);
+    if (extensions.has(path.extname(entry.name)) && (!skipPrivateApiFiles || !entry.name.startsWith("_"))) files.push(fullPath);
   }
   return files;
 }
@@ -74,7 +89,17 @@ function collectApiFiles() {
   const files = [];
   for (const apiRoot of apiRoots) {
     const fullRoot = path.join(root, apiRoot);
-    files.push(...walk(fullRoot));
+    files.push(...walk(fullRoot, apiExtensions, true));
+  }
+  return Array.from(new Set(files));
+}
+
+function collectSourceFiles() {
+  const sourceRoots = ["api", "web/api", "server/scripts/GEO"];
+  const files = [];
+  for (const sourceRoot of sourceRoots) {
+    const fullRoot = path.join(root, sourceRoot);
+    files.push(...walk(fullRoot, sourceExtensions, false));
   }
   return Array.from(new Set(files));
 }
@@ -136,6 +161,7 @@ if (!fs.existsSync(manifestPath)) {
 const manifest = readJson(manifestPath);
 const errors = validateManifest(manifest);
 const registeredPaths = new Set((manifest.endpoints || []).map((endpoint) => endpoint.path));
+const providerCodes = new Set((manifest.providers || []).map((provider) => provider.provider_code));
 const apiFiles = collectApiFiles();
 const missing = [];
 
@@ -154,6 +180,23 @@ if (missing.length) {
       .map((item) => `  - ${item.file} -> ${item.methods.join(",")} ${item.path}`)
       .join("\n")}`
   );
+}
+
+for (const guard of paidProviderGuards) {
+  if (!providerCodes.has(guard.provider)) {
+    errors.push(`paid provider missing from manifest.providers: ${guard.provider}`);
+  }
+}
+
+for (const file of collectSourceFiles()) {
+  const relative = path.relative(root, file);
+  const text = fs.readFileSync(file, "utf8");
+  for (const guard of paidProviderGuards) {
+    if (!guard.terms.some((term) => text.includes(term))) continue;
+    if (!guard.requestPatterns.some((pattern) => text.includes(pattern))) continue;
+    if (guard.guardPatterns.some((pattern) => text.includes(pattern))) continue;
+    errors.push(`paid provider call must use gateway guard: ${relative} -> ${guard.provider}`);
+  }
 }
 
 if (errors.length) {

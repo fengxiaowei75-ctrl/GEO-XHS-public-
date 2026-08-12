@@ -38,7 +38,7 @@ docs/      可选：数据库字段、内容逻辑、Agent skill、分析文档
 
 ## Gateway Monitor
 
-本项目必须接入 `gateway-monitor`。这是跨项目 API 网关、成本监控、限流和问题定位系统，不是可选文档。
+本项目必须接入 `central-api-cost-gateway`。这是跨项目 API 网关、成本监控、限流和问题定位系统，不是可选文档。
 
 强制规则：
 
@@ -48,7 +48,7 @@ docs/      可选：数据库字段、内容逻辑、Agent skill、分析文档
 - 未登记业务身份的高成本 API 默认禁止上线或调用。
 - GitHub Actions 的 `Gateway Contract` 检查必须保持通过。
 
-第一阶段先登记和检查，不迁移真实 provider key。第二阶段再把高成本调用逐步改成通过 `gateway-monitor` SDK/服务代理，老项目只保留 `GATEWAY_SERVICE_TOKEN`。
+所有消耗型调用统一通过中央网关代理；业务项目只保留 `GATEWAY_BASE_URL` 和 `GATEWAY_SERVICE_TOKEN`，供应商 Key 不进入本仓库和业务运行环境。
 
 ## 当前运行环境
 

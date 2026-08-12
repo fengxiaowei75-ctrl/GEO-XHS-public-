@@ -1,9 +1,8 @@
 const { Pool } = require("pg");
 const { requireAuth } = require("./_auth");
-const { checkGateway, makeGatewayContext, reportGateway } = require("./_gateway");
+const { makeGatewayContext, proxyProvider } = require("./_gateway");
 
 const PROVIDER_CODE = "duomi_image_generation";
-const DEFAULT_TASK_API_URL = "https://duomiapi.com/v1/tasks";
 const DEFAULT_IMAGE_MODEL = "gpt-image-2";
 
 let pool;
@@ -42,20 +41,6 @@ function getPool() {
   if (!config) return null;
   if (!pool) pool = new Pool(config);
   return pool;
-}
-
-function taskUrlFor(taskId) {
-  const base = process.env.IMAGE_GENERATION_TASK_API_URL || DEFAULT_TASK_API_URL;
-  if (base.includes("{id}")) return base.replace("{id}", encodeURIComponent(taskId));
-  return `${base.replace(/\/$/, "")}/${encodeURIComponent(taskId)}`;
-}
-
-function imageProviderHeaders(apiKey) {
-  const prefix = cleanText(process.env.IMAGE_GENERATION_AUTH_PREFIX, 32);
-  return {
-    Authorization: prefix ? `${prefix} ${apiKey}` : apiKey,
-    "Content-Type": "application/json",
-  };
 }
 
 function extractImages(payload) {
@@ -231,8 +216,6 @@ module.exports = async function handler(req, res) {
   const startedMono = Date.now();
   let client = null;
   let gatewayContext = null;
-  let gatewayDecision = null;
-  let gatewayReported = false;
 
   try {
     const user = await requireAuth(req, res, "content");
@@ -240,18 +223,11 @@ module.exports = async function handler(req, res) {
 
     const url = new URL(req.url, "http://localhost");
     const taskId = cleanText(url.searchParams.get("taskId") || url.searchParams.get("id"), 160);
-    const apiKey = process.env.IMAGE_GENERATION_API_KEY;
     if (!taskId) {
       sendJson(res, 400, { ok: false, error: "缺少 taskId" });
       return;
     }
-    if (!apiKey) {
-      sendJson(res, 500, { ok: false, error: "服务端缺少 IMAGE_GENERATION_API_KEY" });
-      return;
-    }
 
-    const endpoint = taskUrlFor(taskId);
-    const parsedEndpoint = new URL(endpoint);
     const model = process.env.IMAGE_GENERATION_MODEL || DEFAULT_IMAGE_MODEL;
     gatewayContext = makeGatewayContext({
       user,
@@ -264,31 +240,30 @@ module.exports = async function handler(req, res) {
       description: "多米图片任务状态查询",
       metadata: { task_id: taskId },
     });
-    try {
-      gatewayDecision = await checkGateway(gatewayContext);
-    } catch (error) {
-      if (error.retryAfterSeconds) res.setHeader("Retry-After", String(error.retryAfterSeconds));
-      sendJson(res, error.statusCode || 503, {
-        ok: false,
-        error: "网关限制：图片任务查询暂不可用",
-        detail: error.gateway || error.message,
-      });
-      return;
-    }
 
     const dbPool = getPool();
     if (dbPool) client = await dbPool.connect();
     const modelConfig = await lookupModelConfig(client, model);
-    const providerRes = await fetch(endpoint, {
-      method: "GET",
-      headers: imageProviderHeaders(apiKey),
-    });
-    const responseText = await providerRes.text();
+    let gatewayResult = null;
+    let providerOk = true;
+    let providerStatus = 200;
     let payload = {};
+    let responseText = "";
     try {
-      payload = responseText ? JSON.parse(responseText) : {};
-    } catch {
-      payload = { raw_text: responseText };
+      gatewayResult = await proxyProvider(
+        gatewayContext,
+        "duomi",
+        "tasks_get",
+        { task_id: taskId },
+        { timeoutMs: 30000 },
+      );
+      payload = gatewayResult.data || {};
+      responseText = JSON.stringify(payload);
+    } catch (error) {
+      providerOk = false;
+      providerStatus = error.statusCode || 502;
+      payload = error.payload?.data || error.payload || { error: error.message };
+      responseText = JSON.stringify(payload);
     }
     const finishedAt = new Date();
     const latencyMs = Date.now() - startedMono;
@@ -298,47 +273,30 @@ module.exports = async function handler(req, res) {
       traceId: `web:image-task:${Date.now()}`,
       modelConfigId: modelConfig.model_config_id,
       credentialId: modelConfig.credential_id,
-      status: providerRes.ok ? "success" : "failed",
-      requestHost: parsedEndpoint.host,
-      requestPath: parsedEndpoint.pathname,
-      httpStatus: providerRes.status,
+      status: providerOk ? "success" : "failed",
+      requestHost: "central-api-gateway",
+      requestPath: "/v1/proxy/duomi/tasks_get",
+      httpStatus: providerStatus,
       startedAt,
       finishedAt,
       latencyMs,
       responseBytes: Buffer.byteLength(responseText || ""),
-      errorCode: providerRes.ok ? "" : String(payload?.error?.code || payload?.code || providerRes.status),
-      errorMessage: providerRes.ok ? "" : String(payload?.error?.message || payload?.message || responseText).slice(0, 500),
+      errorCode: providerOk ? "" : String(payload?.error?.code || payload?.code || providerStatus),
+      errorMessage: providerOk ? "" : String(payload?.error?.message || payload?.message || responseText).slice(0, 500),
       rawUsage: { task_id: taskId, task_status: status, image_count: images.length },
       metadata: {
         source: "web_image_generation_workflow",
-        provider: "duomiapi",
+        provider: "duomi",
         task_id: taskId,
         task_status: status,
         image_count: images.length,
         user_id: user.user_id,
-        gateway_request_id: gatewayDecision?.requestId || gatewayContext.requestId,
-        gateway_policy_id: gatewayDecision?.policyId || null,
+        gateway_request_id: gatewayResult?.request_id || gatewayContext.requestId,
       },
     });
 
-    if (!providerRes.ok) {
-      await reportGateway(
-        { ...gatewayContext, ...(gatewayDecision || {}) },
-        {
-          status: "failed",
-          latencyMs,
-          imageCount: images.length,
-          errorCode: String(payload?.error?.code || payload?.code || providerRes.status),
-          errorMessage: String(payload?.error?.message || payload?.message || responseText).slice(0, 500),
-          metadata: {
-            task_id: taskId,
-            task_status: status,
-            upstream_status: providerRes.status,
-          },
-        },
-      );
-      gatewayReported = true;
-      sendJson(res, providerRes.status, {
+    if (!providerOk) {
+      sendJson(res, providerStatus, {
         ok: false,
         error: payload?.error?.message || payload?.message || "图像生成任务查询失败",
         detail: payload,
@@ -346,22 +304,6 @@ module.exports = async function handler(req, res) {
       });
       return;
     }
-
-    await reportGateway(
-      { ...gatewayContext, ...(gatewayDecision || {}) },
-      {
-        status: "success",
-        latencyMs,
-        imageCount: images.length,
-        metadata: {
-          task_id: taskId,
-          task_status: status,
-          image_count: images.length,
-          upstream_status: providerRes.status,
-        },
-      },
-    );
-    gatewayReported = true;
 
     sendJson(res, 200, {
       ok: true,
@@ -373,17 +315,6 @@ module.exports = async function handler(req, res) {
       logWarning,
     });
   } catch (error) {
-    if (gatewayContext && !gatewayReported) {
-      await reportGateway(
-        { ...gatewayContext, ...(gatewayDecision || {}) },
-        {
-          status: "failed",
-          latencyMs: Date.now() - startedMono,
-          errorCode: "request_exception",
-          errorMessage: error.message,
-        },
-      );
-    }
     sendJson(res, error.statusCode || 500, { ok: false, error: error.message || "图像生成任务查询失败" });
   } finally {
     if (client) client.release();

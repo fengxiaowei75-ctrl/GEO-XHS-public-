@@ -21,12 +21,16 @@ jobs:
         run: |
           node scripts/check-gateway-contract.mjs .
           find web/api -name '*.js' -print0 | xargs -0 -n1 node --check
+          python3 -m compileall -q server/scripts/GEO
 
       - name: 安装前端依赖并构建
         run: |
           cd web
           npm ci
+          npm test
           npm run build
+          npx playwright install --with-deps chromium
+          npm run test:e2e
 
   # ===== CD 环节：部署 =====
   deploy:
@@ -39,4 +43,4 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_KEY }}
-          script: bash $HOME/bin/deploy.sh project-a
+          script: bash $HOME/bin/deploy.sh geo-xhs

@@ -56,13 +56,15 @@ def parse_args():
     parser.add_argument("--force-embedding", action="store_true", help="Rebuild asset vector even if it exists.")
     parser.add_argument("--freshness-half-life-days", type=int, default=45)
     parser.add_argument("--prompt-version", default=asset_pipeline.DEFAULT_PROMPT_VERSION)
-    parser.add_argument("--content-api-key", "--kimi-api-key", dest="kimi_api_key", default="")
-    parser.add_argument("--content-base-url", "--kimi-base-url", dest="kimi_base_url", default="")
-    parser.add_argument("--content-model", "--kimi-model", dest="kimi_model", default="")
-    parser.add_argument("--content-temperature", "--kimi-temperature", dest="kimi_temperature", type=float, default=None)
-    parser.add_argument("--content-thinking", "--kimi-thinking", dest="kimi_thinking", choices=["disabled", "auto"], default="")
+    parser.add_argument(
+        "--content-provider",
+        choices=["volcengine_ark_chat", "kimi_chat"],
+        default="volcengine_ark_chat",
+    )
+    parser.add_argument("--content-model", "--kimi-model", dest="content_model", default="")
+    parser.add_argument("--content-temperature", "--kimi-temperature", dest="content_temperature", type=float, default=None)
+    parser.add_argument("--content-thinking", "--kimi-thinking", dest="content_thinking", choices=["disabled", "auto"], default="")
     parser.add_argument("--embedding-model", default="")
-    parser.add_argument("--ark-api-key", default="")
     parser.add_argument("--detail-concurrency", type=int, default=8)
     parser.add_argument("--image-concurrency", type=int, default=8)
     parser.add_argument("--write-batch-size", type=int, default=10)
@@ -70,7 +72,6 @@ def parse_args():
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--retries", type=int, default=3)
     parser.add_argument("--retry-sleep", type=float, default=2.0)
-    parser.add_argument("--endata-token", default="")
     parser.add_argument("--db-host", default=DEFAULT_DB_HOST)
     parser.add_argument("--db-port", default=DEFAULT_DB_PORT)
     parser.add_argument("--db-name", default=DEFAULT_DB_NAME)
@@ -186,20 +187,10 @@ def db_password_from_env(args):
 
 
 def build_detail_args(args):
-    values = detail_pipeline.load_env_file()
-    endata_token = (
-        args.endata_token
-        or os.environ.get("ENDATA_TOKEN")
-        or values.get("ENDATA_TOKEN")
-        or ""
-    )
     db_password = db_password_from_env(args)
-    if not endata_token:
-        raise RuntimeError("Missing Endata token. Set ENDATA_TOKEN or --endata-token.")
     if not args.dry_run and not db_password:
         raise RuntimeError("Missing database password. Set PGPASSWORD or --db-password.")
     return SimpleNamespace(
-        endata_token=endata_token,
         db_password=db_password,
         db_host=args.db_host,
         db_port=args.db_port,
@@ -228,7 +219,6 @@ def build_image_args(args, note_ids, db_password):
         timeout=args.timeout,
         retries=args.retries,
         retry_sleep=args.retry_sleep,
-        ark_api_key=args.ark_api_key,
         db_host=args.db_host,
         db_port=args.db_port,
         db_name=args.db_name,
@@ -255,11 +245,10 @@ def build_asset_args(args, note_ids, db_password):
         max_images_per_note=20,
         dry_run=args.dry_run,
         skip_llm=False,
-        kimi_api_key=args.kimi_api_key,
-        kimi_base_url=args.kimi_base_url,
-        kimi_model=args.kimi_model,
-        kimi_temperature=args.kimi_temperature,
-        kimi_thinking=args.kimi_thinking,
+        content_provider=args.content_provider,
+        content_model=args.content_model,
+        content_temperature=args.content_temperature,
+        content_thinking=args.content_thinking,
         timeout=args.timeout,
         retries=args.retries,
         retry_sleep=args.retry_sleep,
@@ -284,7 +273,6 @@ def build_vector_args(args, note_ids, db_password, force=False):
         poll_interval=60,
         listen_channel=vector_pipeline.DEFAULT_LISTEN_CHANNEL,
         embedding_model=args.embedding_model,
-        ark_api_key=args.ark_api_key,
         timeout=args.timeout,
         retries=args.retries,
         retry_sleep=args.retry_sleep,

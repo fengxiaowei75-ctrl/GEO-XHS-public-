@@ -49,7 +49,7 @@ function makeGatewayContext({
   };
 }
 
-async function requestGateway(path, payload) {
+async function requestGateway(path, payload, extraHeaders = {}, options = {}) {
   const config = gatewayConfig();
   if (!config) {
     if (isProductionLike()) {
@@ -60,14 +60,16 @@ async function requestGateway(path, payload) {
     return { skipped: true, allowed: true, requestId: payload.requestId || `geo-xhs:${Date.now()}` };
   }
 
+  const timeoutMs = Math.max(1000, Number(options.timeoutMs || DEFAULT_TIMEOUT_MS));
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${config.baseUrl}${path}`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${config.token}`,
         "Content-Type": "application/json",
+        ...extraHeaders,
       },
       body: JSON.stringify(payload),
       signal: controller.signal,
@@ -128,8 +130,33 @@ async function reportGateway(context, result) {
   }
 }
 
+async function proxyProvider(request, providerCode, endpointCode, payload, options = {}) {
+  const context = request || {};
+  const result = await requestGateway(
+    `/v1/proxy/${encodeURIComponent(providerCode)}/${encodeURIComponent(endpointCode)}`,
+    {
+      feature: context.featureKey || endpointCode,
+      model: context.modelName || undefined,
+      payload,
+    },
+    {
+      "X-Gateway-Feature": context.featureKey || endpointCode,
+      "X-Gateway-Request-Id": context.requestId || `geo-xhs:${Date.now()}:${crypto.randomUUID()}`,
+    },
+    {
+      timeoutMs: options.timeoutMs,
+    },
+  );
+  return result;
+}
+
 module.exports = {
   checkGateway,
   makeGatewayContext,
   reportGateway,
+  proxyProvider,
+  _internal: {
+    gatewayConfig,
+    requestGateway,
+  },
 };

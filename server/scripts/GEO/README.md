@@ -107,14 +107,11 @@ fresh_hot_score = interaction_score * recency_factor
 从 `/opt/xhs-sync/sync.env`、环境变量或命令行参数读取：
 
 - `PGPASSWORD`
-- `ENDATA_TOKEN`
-- `GEO_CONTENT_API_KEY` 或 `ARK_CHAT_API_KEY`，优先用于豆包/Ark 内容资产总结
-- `GEO_CONTENT_BASE_URL` 或 `ARK_CHAT_BASE_URL`，默认 `https://ark.cn-beijing.volces.com/api/v3`
-- `GEO_CONTENT_MODEL` 或 `ARK_CHAT_MODEL`，默认 `doubao-seed-2-0-mini-260428`
-- `GEO_CONTENT_TEMPERATURE` 或 `ARK_CHAT_TEMPERATURE`，默认 `0.6`
-- `GEO_CONTENT_THINKING` 或 `ARK_CHAT_THINKING`，默认 `disabled`，用于 Ark chat 请求关闭深度思考
-- `KIMI_API_KEY` / `KIMI_BASE_URL` / `KIMI_MODEL` 仅作为历史兼容兜底
-- `KIMI_TEMPERATURE` / `KIMI_THINKING` 仅作为历史兼容兜底
-- `ARK_API_KEY` 或 `VOLC_API_KEY`
+- `GATEWAY_BASE_URL`，ECS worker 通常为 `http://127.0.0.1:8020`
+- `GATEWAY_SERVICE_TOKEN`，中央网关为 `geo-xhs` 项目签发的 service token
+- `GEO_CONTENT_MODEL`，默认 `doubao-seed-2-0-mini-260428`
+- `GEO_CONTENT_TEMPERATURE`，默认 `0.6`
+- `GEO_CONTENT_THINKING`，默认 `disabled`
 - `ARK_EMBEDDING_MODEL`，默认 `doubao-embedding-vision-251215`
-- 图像生成/图生图使用 `IMAGE_GENERATION_API_KEY` 调用 Duomi API，模型配置表默认 `gpt-image-2`，Web 默认尺寸 `IMAGE_GENERATION_SIZE=1024x1024`
+- 供应商 Key、艺恩 Token、Ark/Kimi/Embedding 凭据和多米凭据均不在本项目环境中；它们通过中央网关适配器使用
+- 图片生成模型配置表默认 `gpt-image-2`，Web 默认尺寸 `IMAGE_GENERATION_SIZE=1024x1024`

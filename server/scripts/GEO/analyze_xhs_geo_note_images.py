@@ -12,13 +12,9 @@ from pathlib import Path
 import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import Json, execute_values
-import requests
-
 import geo_ops_gateway as ops
 
 
-ARK_API_KEY = ""
-ARK_URL = "https://ark.cn-beijing.volces.com/api/v3/responses"
 ARK_MODEL = "doubao-seed-2-0-mini-260428"
 DEFAULT_ENV_FILE = os.environ.get("XHS_SYNC_ENV_FILE") or (
     "/opt/xhs-sync/sync.env"
@@ -49,7 +45,6 @@ def parse_args():
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--retries", type=int, default=3)
     parser.add_argument("--retry-sleep", type=float, default=2.0)
-    parser.add_argument("--ark-api-key", default="")
     parser.add_argument("--db-host", default=DEFAULT_DB_HOST)
     parser.add_argument("--db-port", default=DEFAULT_DB_PORT)
     parser.add_argument("--db-name", default=DEFAULT_DB_NAME)
@@ -75,18 +70,10 @@ def load_env_file():
 def enrich_args(args):
     values = load_env_file()
     args.db_password = args.db_password or os.environ.get("PGPASSWORD") or values.get("PGPASSWORD") or ""
-    args.ark_api_key = (
-        getattr(args, "ark_api_key", "")
-        or os.environ.get("ARK_API_KEY")
-        or os.environ.get("VOLC_API_KEY")
-        or values.get("ARK_API_KEY")
-        or values.get("VOLC_API_KEY")
-        or ARK_API_KEY
-    )
     if not args.dry_run and not args.db_password:
         raise RuntimeError("Missing database password. Set PGPASSWORD or --db-password.")
-    if not args.dry_run and not args.ark_api_key:
-        raise RuntimeError("Missing Ark API key. Set ARK_API_KEY/VOLC_API_KEY or --ark-api-key.")
+    if not args.dry_run:
+        ops.gateway_proxy_url("volcengine_ark_vision")
     return args
 
 
@@ -580,10 +567,7 @@ def analyze_image(args, image_task):
             }
         ],
     }
-    headers = {
-        "Authorization": f"Bearer {args.ark_api_key}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
     last_error = None
     last_analysis_url = image_task["image_url"]
     last_transport = "remote_url" if args.remote_image_url else "data_url"
@@ -603,7 +587,7 @@ def analyze_image(args, image_task):
             try:
                 response = ops.call_api(
                     "POST",
-                    ARK_URL,
+                    ops.gateway_proxy_url("volcengine_ark_vision"),
                     provider_code="volcengine_ark_vision",
                     operation="image_analysis",
                     model_name=ARK_MODEL,

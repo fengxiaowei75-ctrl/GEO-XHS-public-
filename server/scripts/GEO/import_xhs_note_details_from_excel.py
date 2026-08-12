@@ -6,7 +6,6 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 from zipfile import ZipFile
@@ -15,13 +14,10 @@ from xml.etree import ElementTree as ET
 import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import Json, execute_values
-import requests
 
 import geo_ops_gateway as ops
 
 
-ENDATA_BASE_URL = "https://dataapi.endata.com.cn"
-NOTE_DETAIL_API = "/V2/Xhs/GetStandardNoteInfo"
 DEFAULT_ENV_FILE = os.environ.get("XHS_SYNC_ENV_FILE") or (
     "/opt/xhs-sync/sync.env"
     if os.path.exists("/opt/xhs-sync")
@@ -31,7 +27,6 @@ DEFAULT_EXCEL_FILE = os.environ.get("XHS_GEO_DEFAULT_EXCEL_FILE") or (
     "/tmp/geo-xhs/sample-notes.xlsx"
 )
 DEFAULT_TABLE = "public.note_details"
-DEFAULT_ENDATA_TOKEN = ""
 DEFAULT_DB_HOST = os.environ.get("PGHOST") or "localhost"
 DEFAULT_DB_PORT = os.environ.get("PGPORT") or "5432"
 DEFAULT_DB_NAME = os.environ.get("PGDATABASE") or "xhs_geo"
@@ -58,7 +53,6 @@ def parse_args():
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--retries", type=int, default=4)
     parser.add_argument("--retry-sleep", type=float, default=2.0)
-    parser.add_argument("--endata-token", default="")
     parser.add_argument("--db-host", default=DEFAULT_DB_HOST)
     parser.add_argument("--db-port", default=DEFAULT_DB_PORT)
     parser.add_argument("--db-name", default=DEFAULT_DB_NAME)
@@ -83,15 +77,7 @@ def load_env_file():
 
 def enrich_args(args):
     values = load_env_file()
-    args.endata_token = (
-        args.endata_token
-        or os.environ.get("ENDATA_TOKEN")
-        or values.get("ENDATA_TOKEN")
-        or DEFAULT_ENDATA_TOKEN
-    )
     args.db_password = args.db_password or os.environ.get("PGPASSWORD") or values.get("PGPASSWORD") or ""
-    if not args.endata_token:
-        raise RuntimeError("Missing Endata token. Set ENDATA_TOKEN or --endata-token.")
     if not args.dry_run and not args.db_password:
         raise RuntimeError("Missing database password. Set PGPASSWORD or --db-password.")
     return args
@@ -257,63 +243,31 @@ def normalize_records(records, source_file, keyword, max_notes=0):
 
 
 def request_note_detail(args, note_id):
-    url = ENDATA_BASE_URL + NOTE_DETAIL_API
-    params = {"XhsId": note_id, "Token": args.endata_token}
+    url = ops.gateway_proxy_url("endata_xhs_note_detail")
+    params = {"XhsId": note_id}
     last_error = None
     for attempt in range(args.retries + 1):
-        started_at = datetime.now(timezone.utc)
-        started_mono = time.monotonic()
         response = None
         try:
-            response = requests.get(
+            response = ops.call_api(
+                "GET",
                 url,
+                provider_code="endata_xhs_note_detail",
+                operation="note_detail_fetch",
+                note_id=note_id,
+                attempt_no=attempt + 1,
+                max_attempts=args.retries + 1,
+                metadata={"source": "note_details", "business_status": "pending"},
                 params=params,
                 timeout=args.timeout,
             )
-            latency_ms = int((time.monotonic() - started_mono) * 1000)
             if response.status_code >= 400:
-                ops.record_api_call(
-                    provider_code="endata_xhs_note_detail",
-                    operation="note_detail_fetch",
-                    method="GET",
-                    url=url,
-                    status="failed",
-                    started_at=started_at,
-                    finished_at=datetime.now(timezone.utc),
-                    latency_ms=latency_ms,
-                    http_status=response.status_code,
-                    attempt_no=attempt + 1,
-                    max_attempts=args.retries + 1,
-                    note_id=note_id,
-                    response_bytes=len(response.content or b""),
-                    error_code=f"http_{response.status_code}",
-                    error_message=response.text[:500],
-                    metadata={"source": "note_details", "business_status": "http_failed"},
-                )
                 raise RuntimeError(f"HTTP {response.status_code}: {response.text[:500]}")
             payload = response.json()
             code = payload.get("Code")
             if code not in (0, 200, "0", "200", None):
                 message = str(payload.get("Msg") or "")
                 error_message = f"Code={code} Msg={message}"
-                ops.record_api_call(
-                    provider_code="endata_xhs_note_detail",
-                    operation="note_detail_fetch",
-                    method="GET",
-                    url=url,
-                    status="failed",
-                    started_at=started_at,
-                    finished_at=datetime.now(timezone.utc),
-                    latency_ms=latency_ms,
-                    http_status=response.status_code,
-                    attempt_no=attempt + 1,
-                    max_attempts=args.retries + 1,
-                    note_id=note_id,
-                    response_bytes=len(response.content or b""),
-                    error_code="endata_business_code",
-                    error_message=error_message,
-                    metadata={"source": "note_details", "business_code": code, "business_status": "failed"},
-                )
                 last_error = RuntimeError(error_message)
                 if ("请求失败" in message or "重试" in message) and attempt < args.retries:
                     time.sleep(args.retry_sleep * (attempt + 1))
@@ -326,22 +280,6 @@ def request_note_detail(args, note_id):
                     "data": {},
                 }
             data = payload.get("Data") or {}
-            ops.record_api_call(
-                provider_code="endata_xhs_note_detail",
-                operation="note_detail_fetch",
-                method="GET",
-                url=url,
-                status="success",
-                started_at=started_at,
-                finished_at=datetime.now(timezone.utc),
-                latency_ms=latency_ms,
-                http_status=response.status_code,
-                attempt_no=attempt + 1,
-                max_attempts=args.retries + 1,
-                note_id=note_id,
-                response_bytes=len(response.content or b""),
-                metadata={"source": "note_details", "business_status": "success"},
-            )
             return {
                 "note_id": note_id,
                 "detail_status": "success",
@@ -351,24 +289,6 @@ def request_note_detail(args, note_id):
             }
         except Exception as exc:
             last_error = exc
-            if response is None:
-                status = "timeout" if isinstance(exc, requests.Timeout) else "failed"
-                ops.record_api_call(
-                    provider_code="endata_xhs_note_detail",
-                    operation="note_detail_fetch",
-                    method="GET",
-                    url=url,
-                    status=status,
-                    started_at=started_at,
-                    finished_at=datetime.now(timezone.utc),
-                    latency_ms=int((time.monotonic() - started_mono) * 1000),
-                    attempt_no=attempt + 1,
-                    max_attempts=args.retries + 1,
-                    note_id=note_id,
-                    error_code=exc.__class__.__name__,
-                    error_message=str(exc),
-                    metadata={"source": "note_details", "business_status": "request_exception"},
-                )
             if attempt >= args.retries:
                 break
             time.sleep(args.retry_sleep * (attempt + 1))

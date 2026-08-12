@@ -1,6 +1,6 @@
 const { Pool } = require("pg");
 const { requireAuth } = require("./_auth");
-const { checkGateway, makeGatewayContext, reportGateway } = require("./_gateway");
+const { makeGatewayContext, proxyProvider } = require("./_gateway");
 
 let pool;
 
@@ -72,25 +72,16 @@ module.exports = async function handler(req, res) {
 
   const startedMono = Date.now();
   let gatewayContext = null;
-  let gatewayDecision = null;
-  let gatewayReported = false;
 
   try {
     const user = await requireAuth(req, res, "content");
     if (!user) return;
 
     const { query, limit } = await readJsonBody(req);
-    const embeddingUrl = process.env.EMBEDDING_API_URL || "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal";
-    const embeddingKey = process.env.EMBEDDING_API_KEY;
     const embeddingModel = process.env.EMBEDDING_MODEL || "doubao-embedding-vision-251215";
 
     if (!query || typeof query !== "string") {
       sendJson(res, 400, { success: false, error: "缺少查询内容" });
-      return;
-    }
-
-    if (!embeddingKey) {
-      sendJson(res, 500, { success: false, error: "服务端缺少 EMBEDDING_API_KEY" });
       return;
     }
 
@@ -114,72 +105,25 @@ module.exports = async function handler(req, res) {
         limit: normalizeLimit(limit),
       },
     });
-    try {
-      gatewayDecision = await checkGateway(gatewayContext);
-    } catch (error) {
-      if (error.retryAfterSeconds) res.setHeader("Retry-After", String(error.retryAfterSeconds));
-      sendJson(res, error.statusCode || 503, {
-        success: false,
-        error: "网关限制：向量检索暂不可用",
-        detail: error.gateway || error.message,
-      });
-      return;
-    }
-
-    const embeddingRes = await fetch(embeddingUrl, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${embeddingKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const gatewayResult = await proxyProvider(gatewayContext, "volcengine_ark", "embeddings", {
         model: embeddingModel,
         input: [{ type: "text", text: query }],
-      }),
-    });
-
-    if (!embeddingRes.ok) {
-      const detail = await embeddingRes.text();
-      await reportGateway(
-        { ...gatewayContext, ...(gatewayDecision || {}) },
-        {
-          status: "failed",
-          latencyMs: Date.now() - startedMono,
-          errorCode: String(embeddingRes.status),
-          errorMessage: detail.slice(0, 500),
-          metadata: { upstream_status: embeddingRes.status },
-        },
-      );
-      gatewayReported = true;
-      sendJson(res, 500, {
-        success: false,
-        error: `Embedding API 错误: ${embeddingRes.status}`,
-        detail,
       });
-      return;
-    }
-
-    const embeddingData = await embeddingRes.json();
-    const usage = embeddingData?.usage && typeof embeddingData.usage === "object" ? embeddingData.usage : {};
-    const totalTokens = Number(usage.total_tokens || usage.totalTokens || usage.prompt_tokens || usage.input_tokens || 0) || 0;
+    const embeddingData = gatewayResult.data || gatewayResult;
+    const embeddingResponseUsage = gatewayResult.usage || embeddingData?.usage || {};
+    const totalTokens = Number(
+      embeddingResponseUsage.total_tokens ||
+        embeddingResponseUsage.totalTokens ||
+        embeddingResponseUsage.prompt_tokens ||
+        embeddingResponseUsage.input_tokens ||
+        0,
+    ) || 0;
     const embeddingPayload = embeddingData?.data;
     const queryVector = Array.isArray(embeddingPayload)
       ? embeddingPayload[0]?.embedding
       : embeddingPayload?.embedding;
 
     if (!Array.isArray(queryVector) || !queryVector.length) {
-      await reportGateway(
-        { ...gatewayContext, ...(gatewayDecision || {}) },
-        {
-          status: "failed",
-          latencyMs: Date.now() - startedMono,
-          totalTokens,
-          errorCode: "missing_embedding_vector",
-          errorMessage: "Embedding API 未返回有效向量",
-          metadata: { usage },
-        },
-      );
-      gatewayReported = true;
       sendJson(res, 500, { success: false, error: "Embedding API 未返回有效向量" });
       return;
     }
@@ -213,42 +157,20 @@ module.exports = async function handler(req, res) {
     `;
 
     const result = await dbPool.query(sql, [vectorStr, normalizeLimit(limit)]);
-    await reportGateway(
-      { ...gatewayContext, ...(gatewayDecision || {}) },
-      {
-        status: "success",
-        latencyMs: Date.now() - startedMono,
-        totalTokens,
-        metadata: {
-          row_count: result.rowCount,
-          result_limit: normalizeLimit(limit),
-          usage,
-        },
-      },
-    );
-    gatewayReported = true;
-
     sendJson(res, 200, {
       success: true,
       query,
       results: result.rows,
       rowCount: result.rowCount,
+      usage: embeddingResponseUsage,
+      cost: gatewayResult.cost,
+      request_id: gatewayResult.request_id,
     });
   } catch (err) {
-    if (gatewayContext && !gatewayReported) {
-      await reportGateway(
-        { ...gatewayContext, ...(gatewayDecision || {}) },
-        {
-          status: "failed",
-          latencyMs: Date.now() - startedMono,
-          errorCode: "request_exception",
-          errorMessage: err instanceof Error ? err.message : String(err),
-        },
-      );
-    }
     sendJson(res, 500, {
       success: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: err.statusCode ? "网关限制：向量检索暂不可用" : err instanceof Error ? err.message : String(err),
+      detail: err.payload || undefined,
     });
   }
 };

@@ -226,7 +226,7 @@
       "feature_key": "image_task_polling",
       "auth_required": "user",
       "cost_class": "external_api",
-      "high_cost": false,
+      "high_cost": true,
       "default_policy_key": "task_polling_standard",
       "description": "多米图片任务状态查询"
     },

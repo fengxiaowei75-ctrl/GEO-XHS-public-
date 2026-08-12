@@ -145,6 +145,32 @@ export function ChatWidget() {
         throw new Error(payload.error || `HTTP ${res.status}`);
       }
 
+      const contentType = res.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        const payload = await res.json();
+        const data = (payload.data || payload) as Record<string, unknown>;
+        const content =
+          (typeof data.content === "string" && data.content) ||
+          (typeof data.answer === "string" && data.answer) ||
+          (typeof data.message === "string" && data.message) ||
+          (typeof (data.data as Record<string, unknown> | undefined)?.content === "string" &&
+            ((data.data as Record<string, unknown>).content as string)) ||
+          "";
+        const nextConversationId =
+          typeof data.conversation_id === "string"
+            ? data.conversation_id
+            : typeof (data.data as Record<string, unknown> | undefined)?.conversation_id === "string"
+              ? ((data.data as Record<string, unknown>).conversation_id as string)
+              : null;
+        if (nextConversationId && !conversationId) setConversationId(nextConversationId);
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = { role: "assistant", content: content || "Coze 未返回文本内容。" };
+          return updated;
+        });
+        return;
+      }
+
       const reader = res.body?.getReader();
       if (!reader) throw new Error("响应流为空");
 

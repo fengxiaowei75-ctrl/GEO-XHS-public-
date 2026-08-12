@@ -3,14 +3,11 @@ import argparse
 import json
 import os
 import select
-import sys
 import time
 from pathlib import Path
 
 import psycopg2
 from psycopg2 import sql
-import requests
-
 import geo_ops_gateway as ops
 
 
@@ -22,7 +19,6 @@ DEFAULT_ENV_FILE = os.environ.get("XHS_SYNC_ENV_FILE") or (
 DEFAULT_ASSET_TABLE = "public.geo_note_content_assets"
 DEFAULT_VECTOR_TABLE = "public.geo_note_content_asset_vectors"
 DEFAULT_EMBEDDING_MODEL = "doubao-embedding-vision-251215"
-ARK_EMBEDDING_URL = "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal"
 DEFAULT_LISTEN_CHANNEL = "geo_note_content_asset_changed"
 DEFAULT_DB_HOST = os.environ.get("PGHOST") or "localhost"
 DEFAULT_DB_PORT = os.environ.get("PGPORT") or "5432"
@@ -45,7 +41,6 @@ def parse_args():
     parser.add_argument("--poll-interval", type=int, default=60, help="Seconds between fallback polling in watch mode.")
     parser.add_argument("--listen-channel", default=DEFAULT_LISTEN_CHANNEL)
     parser.add_argument("--embedding-model", default="")
-    parser.add_argument("--ark-api-key", default="")
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--retries", type=int, default=3)
     parser.add_argument("--retry-sleep", type=float, default=2.0)
@@ -73,29 +68,9 @@ def load_env_file():
     return values
 
 
-def fallback_ark_api_key():
-    try:
-        script_dir = Path(__file__).resolve().parent
-        if str(script_dir) not in sys.path:
-            sys.path.insert(0, str(script_dir))
-        import analyze_xhs_geo_note_images as image_pipeline
-
-        return getattr(image_pipeline, "ARK_API_KEY", "")
-    except Exception:
-        return ""
-
-
 def enrich_args(args):
     values = load_env_file()
     args.db_password = args.db_password or os.environ.get("PGPASSWORD") or values.get("PGPASSWORD") or ""
-    args.ark_api_key = (
-        args.ark_api_key
-        or os.environ.get("ARK_API_KEY")
-        or os.environ.get("VOLC_API_KEY")
-        or values.get("ARK_API_KEY")
-        or values.get("VOLC_API_KEY")
-        or fallback_ark_api_key()
-    )
     args.embedding_model = (
         args.embedding_model
         or os.environ.get("ARK_EMBEDDING_MODEL")
@@ -104,8 +79,8 @@ def enrich_args(args):
     )
     if not args.db_password:
         raise RuntimeError("Missing database password. Set PGPASSWORD or --db-password.")
-    if not args.dry_run and not args.ark_api_key:
-        raise RuntimeError("Missing Ark API key. Set ARK_API_KEY/VOLC_API_KEY or --ark-api-key.")
+    if not args.dry_run:
+        ops.gateway_proxy_url("volcengine_ark_embedding")
     if not args.force:
         args.only_missing = True
     return args
@@ -234,16 +209,13 @@ def get_embedding(args, text, asset=None):
         "model": args.embedding_model,
         "input": [{"type": "text", "text": text}],
     }
-    headers = {
-        "Authorization": f"Bearer {args.ark_api_key}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
     last_error = None
     for attempt in range(args.retries + 1):
         try:
             response = ops.call_api(
                 "POST",
-                ARK_EMBEDDING_URL,
+                ops.gateway_proxy_url("volcengine_ark_embedding"),
                 provider_code="volcengine_ark_embedding",
                 operation="asset_embedding",
                 model_name=args.embedding_model,

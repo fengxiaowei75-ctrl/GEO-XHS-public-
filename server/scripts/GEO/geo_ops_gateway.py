@@ -34,6 +34,23 @@ SENSITIVE_MARKERS = (
     "passwd",
     "pwd",
 )
+STRICT_PAID_PROVIDER_CODES = {
+    "duomi_image_generation",
+    "endata_xhs_note_detail",
+    "volcengine_ark_chat",
+    "volcengine_ark_embedding",
+    "volcengine_ark_vision",
+    "kimi_chat",
+}
+
+CENTRAL_PROVIDER_ROUTES = {
+    "duomi_image_generation": ("duomi", "images_generations"),
+    "endata_xhs_note_detail": ("endata", "xhs_note_detail"),
+    "volcengine_ark_chat": ("volcengine_ark", "chat_completions"),
+    "volcengine_ark_embedding": ("volcengine_ark", "embeddings"),
+    "volcengine_ark_vision": ("volcengine_ark", "responses"),
+    "kimi_chat": ("kimi", "chat_completions"),
+}
 
 _DB_CONFIG = {}
 _CURRENT_SCRIPT_KEY = None
@@ -57,6 +74,89 @@ def load_env_file(path=None):
         key, value = line.split("=", 1)
         values[key.strip()] = value.strip().strip("'").strip('"')
     return values
+
+
+def gateway_config():
+    values = load_env_file()
+    base_url = (os.environ.get("GATEWAY_BASE_URL") or values.get("GATEWAY_BASE_URL") or "").rstrip("/")
+    token = os.environ.get("GATEWAY_SERVICE_TOKEN") or values.get("GATEWAY_SERVICE_TOKEN") or ""
+    return base_url, token
+
+
+def central_provider_route(provider_code):
+    return CENTRAL_PROVIDER_ROUTES.get(str(provider_code or "").strip())
+
+
+def gateway_proxy_url(provider_code):
+    route = central_provider_route(provider_code)
+    if not route:
+        return None
+    base_url, token = gateway_config()
+    if not base_url or not token:
+        raise RuntimeError("Missing GATEWAY_BASE_URL or GATEWAY_SERVICE_TOKEN")
+    provider, endpoint = route
+    return f"{base_url}/v1/proxy/{provider}/{endpoint}"
+
+
+def gateway_response(result, request_url, status_code=None):
+    response = requests.Response()
+    response.status_code = int(
+        result.get("upstream_status")
+        or result.get("status_code")
+        or status_code
+        or 200
+    )
+    response.url = request_url
+    response.headers["content-type"] = "application/json"
+    if result.get("request_id"):
+        response.headers["x-gateway-request-id"] = str(result["request_id"])
+    body = result.get("data") if isinstance(result, dict) and "data" in result else result
+    response._content = json.dumps(body if body is not None else {}, ensure_ascii=False).encode("utf-8")
+    response.encoding = "utf-8"
+    return response
+
+
+def call_central_proxy(
+    method,
+    provider_code,
+    operation,
+    model_name=None,
+    metadata=None,
+    json_payload=None,
+    params=None,
+    timeout=120,
+):
+    route = central_provider_route(provider_code)
+    if not route:
+        return None
+    base_url, token = gateway_config()
+    request_url = gateway_proxy_url(provider_code)
+    provider, endpoint = route
+    payload = dict(json_payload or {})
+    if method.upper() == "GET":
+        payload.update({key: value for key, value in (params or {}).items() if key.lower() != "token"})
+    response = requests.post(
+        request_url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "X-Gateway-Feature": operation,
+            "X-Gateway-Request-Id": f"geo-xhs:{operation}:{int(time.time() * 1000)}:{uuid.uuid4()}",
+        },
+        json={
+            "feature": operation,
+            "model": model_name,
+            "payload": payload,
+        },
+        timeout=timeout,
+    )
+    try:
+        result = response.json()
+    except Exception:
+        result = {"error": response.text[:1000], "upstream_status": response.status_code}
+    if isinstance(result, dict):
+        result.setdefault("upstream_status", response.status_code)
+    return gateway_response(result, request_url, response.status_code)
 
 
 def configure_db(host=None, port=None, dbname=None, user=None, password=None):
@@ -402,6 +502,25 @@ def response_usage(payload):
     return usage if isinstance(usage, dict) else {}
 
 
+def classify_provider_payload(provider_code, payload):
+    if provider_code != "endata_xhs_note_detail" or not isinstance(payload, dict):
+        return None
+    code = payload.get("Code")
+    if code in (0, 200, "0", "200", None):
+        return None
+    message = str(payload.get("Msg") or "")
+    return {
+        "status": "failed",
+        "error_code": "endata_business_code",
+        "error_message": f"Code={code} Msg={message}",
+        "metadata": {
+            "business_code": code,
+            "business_message": message,
+            "business_status": "failed",
+        },
+    }
+
+
 def int_from_usage(usage, *keys):
     for key in keys:
         value = usage.get(key) if isinstance(usage, dict) else None
@@ -549,10 +668,28 @@ def check_rate_limits(provider_code, model_name=None):
     try:
         conn = db_connect()
         if conn is None:
+            if provider_code in STRICT_PAID_PROVIDER_CODES and os.environ.get("GEO_PAID_PROVIDER_FAIL_OPEN") != "1":
+                return {
+                    "blocked": True,
+                    "error": f"rate limit database unavailable for paid provider {provider_code}",
+                    "payload": {
+                        "provider_code": provider_code,
+                        "error_code": "rate_limit_db_unavailable",
+                    },
+                }
             return None
         try:
             model_config_id, credential_id = resolve_model_and_credential(conn, provider_code, model_name)
             rules = matching_rate_limit_rules(conn, provider_code, model_config_id, credential_id)
+            if not rules and provider_code in STRICT_PAID_PROVIDER_CODES and os.environ.get("GEO_PAID_PROVIDER_FAIL_OPEN") != "1":
+                return {
+                    "blocked": True,
+                    "error": f"no enabled rate limit rule for paid provider {provider_code}",
+                    "payload": {
+                        "provider_code": provider_code,
+                        "error_code": "rate_limit_rule_missing",
+                    },
+                }
             for rule in rules:
                 rule_id, rule_name, period_seconds, max_calls, max_tokens, max_estimated_cost, hard_block, *_ = rule
                 calls_total, tokens_total, estimated_cost = usage_for_rule(conn, rule)
@@ -579,7 +716,20 @@ def check_rate_limits(provider_code, model_name=None):
         finally:
             conn.close()
     except Exception as exc:
-        warn(f"check_rate_limits skipped: {exc}")
+        if provider_code not in STRICT_PAID_PROVIDER_CODES:
+            warn(f"check_rate_limits skipped: {exc}")
+            return None
+        if os.environ.get("GEO_PAID_PROVIDER_FAIL_OPEN") == "1":
+            warn(f"check_rate_limits skipped: {exc}")
+            return None
+        return {
+            "blocked": True,
+            "error": f"rate limit check failed for paid provider {provider_code}: {exc}",
+            "payload": {
+                "provider_code": provider_code,
+                "error_code": "rate_limit_check_failed",
+            },
+        }
     return None
 
 
@@ -695,7 +845,8 @@ def call_api(
     metadata=None,
     **kwargs,
 ):
-    limit_decision = check_rate_limits(provider_code, model_name=model_name)
+    central_route = central_provider_route(provider_code)
+    limit_decision = None if central_route else check_rate_limits(provider_code, model_name=model_name)
     if limit_decision and limit_decision.get("blocked"):
         now = datetime.now(timezone.utc)
         record_api_call(
@@ -728,10 +879,29 @@ def call_api(
     error_message = None
     usage = {}
     try:
-        response = requests.request(method, url, **kwargs)
+        if central_route:
+            response = call_central_proxy(
+                method,
+                provider_code,
+                operation,
+                model_name=model_name,
+                metadata=metadata,
+                json_payload=kwargs.get("json"),
+                params=kwargs.get("params"),
+                timeout=kwargs.get("timeout", 120),
+            )
+        else:
+            response = requests.request(method, url, **kwargs)
         status, error_code = classify_http_status(response.status_code)
         try:
-            usage = response_usage(response.json())
+            payload = response.json()
+            usage = response_usage(payload)
+            provider_classification = classify_provider_payload(provider_code, payload)
+            if provider_classification:
+                status = provider_classification["status"]
+                error_code = provider_classification["error_code"]
+                error_message = provider_classification["error_message"]
+                metadata = {**(metadata or {}), **provider_classification["metadata"]}
         except Exception:
             usage = {}
         return response

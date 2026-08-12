@@ -17,7 +17,7 @@ cp .env.example .env
 docker compose --profile workers up --build
 ```
 
-Docker 容器读取 `.env` 中的 `PG*`、`ENDATA_TOKEN`、`ARK_API_KEY` 等变量；生产服务器当前仍使用 systemd 托管 `/opt/xhs-sync/scripts/GEO` 下的 worker。
+Docker 容器读取 `.env` 中的 `PG*`、`GATEWAY_BASE_URL`、`GATEWAY_SERVICE_TOKEN` 和模型请求参数；供应商真实 Key 只保存在中央网关，生产服务器当前仍使用 systemd 托管 `/opt/xhs-sync/scripts/GEO` 下的 worker。
 
 ## Active Services
 
@@ -37,7 +37,7 @@ systemctl status xhs-geo-asset-vector.service --no-pager
 
 ## Secrets
 
-线上明文环境文件仍在服务器：
+线上运行时环境文件仍在服务器：
 
 ```bash
 /opt/xhs-sync/sync.env
@@ -55,7 +55,7 @@ server/secrets/sync.enc.env
 sops -d server/secrets/sync.enc.env
 ```
 
-恢复到服务器时，不要把明文提交进 GitHub：
+恢复到服务器时，不要把明文提交进 GitHub。业务仓库环境只保留数据库连接、网关地址、网关 service token 和非敏感模型参数：
 
 ```bash
 sops -d server/secrets/sync.enc.env > /private/tmp/sync.env

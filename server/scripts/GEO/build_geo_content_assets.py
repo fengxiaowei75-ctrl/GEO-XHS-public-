@@ -13,8 +13,6 @@ from pathlib import Path
 import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import Json
-import requests
-
 import geo_ops_gateway as ops
 
 
@@ -32,7 +30,6 @@ DEFAULT_DB_PORT = os.environ.get("PGPORT") or "5432"
 DEFAULT_DB_NAME = os.environ.get("PGDATABASE") or "xhs_geo"
 DEFAULT_DB_USER = os.environ.get("PGUSER") or "app_user"
 
-DEFAULT_CONTENT_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 DEFAULT_CONTENT_MODEL = "doubao-seed-2-0-mini-260428"
 DEFAULT_CONTENT_TEMPERATURE = 0.6
 DEFAULT_CONTENT_THINKING = "disabled"
@@ -72,11 +69,15 @@ def parse_args():
     parser.add_argument("--max-images-per-note", type=int, default=20)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-llm", action="store_true", help="Build payload and skip content model call/write asset.")
-    parser.add_argument("--content-api-key", "--kimi-api-key", dest="kimi_api_key", default="")
-    parser.add_argument("--content-base-url", "--kimi-base-url", dest="kimi_base_url", default="")
-    parser.add_argument("--content-model", "--kimi-model", dest="kimi_model", default="")
-    parser.add_argument("--content-temperature", "--kimi-temperature", dest="kimi_temperature", type=float, default=None)
-    parser.add_argument("--content-thinking", "--kimi-thinking", dest="kimi_thinking", choices=["disabled", "auto"], default="")
+    parser.add_argument(
+        "--content-provider",
+        choices=["volcengine_ark_chat", "kimi_chat"],
+        default="volcengine_ark_chat",
+        help="Central gateway provider route for content generation.",
+    )
+    parser.add_argument("--content-model", "--kimi-model", dest="content_model", default="")
+    parser.add_argument("--content-temperature", "--kimi-temperature", dest="content_temperature", type=float, default=None)
+    parser.add_argument("--content-thinking", "--kimi-thinking", dest="content_thinking", choices=["disabled", "auto"], default="")
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--retries", type=int, default=3)
     parser.add_argument("--retry-sleep", type=float, default=2.0)
@@ -105,75 +106,37 @@ def load_env_file():
 def enrich_args(args):
     values = load_env_file()
     args.db_password = args.db_password or os.environ.get("PGPASSWORD") or values.get("PGPASSWORD") or ""
-    args.kimi_api_key = (
-        args.kimi_api_key
-        or os.environ.get("GEO_CONTENT_API_KEY")
-        or os.environ.get("ARK_CHAT_API_KEY")
-        or os.environ.get("KIMI_API_KEY")
-        or os.environ.get("MOONSHOT_API_KEY")
-        or values.get("GEO_CONTENT_API_KEY")
-        or values.get("ARK_CHAT_API_KEY")
-        or values.get("KIMI_API_KEY")
-        or values.get("MOONSHOT_API_KEY")
-        or ""
-    )
-    args.kimi_model = (
-        args.kimi_model
+    args.content_model = (
+        args.content_model
         or os.environ.get("GEO_CONTENT_MODEL")
-        or os.environ.get("ARK_CHAT_MODEL")
-        or os.environ.get("KIMI_MODEL")
         or values.get("GEO_CONTENT_MODEL")
-        or values.get("ARK_CHAT_MODEL")
-        or values.get("KIMI_MODEL")
         or DEFAULT_CONTENT_MODEL
     )
-    args.kimi_thinking = (
-        args.kimi_thinking
+    args.content_thinking = (
+        args.content_thinking
         or os.environ.get("GEO_CONTENT_THINKING")
-        or os.environ.get("ARK_CHAT_THINKING")
-        or os.environ.get("KIMI_THINKING")
         or values.get("GEO_CONTENT_THINKING")
-        or values.get("ARK_CHAT_THINKING")
-        or values.get("KIMI_THINKING")
         or DEFAULT_CONTENT_THINKING
     )
-    if getattr(args, "kimi_temperature", None) is None:
+    if getattr(args, "content_temperature", None) is None:
         temperature = (
             os.environ.get("GEO_CONTENT_TEMPERATURE")
-            or os.environ.get("ARK_CHAT_TEMPERATURE")
-            or os.environ.get("KIMI_TEMPERATURE")
             or values.get("GEO_CONTENT_TEMPERATURE")
-            or values.get("ARK_CHAT_TEMPERATURE")
-            or values.get("KIMI_TEMPERATURE")
         )
-        args.kimi_temperature = float(temperature) if temperature else DEFAULT_CONTENT_TEMPERATURE
-    args.kimi_base_url = (
-        args.kimi_base_url
-        or os.environ.get("GEO_CONTENT_BASE_URL")
-        or os.environ.get("ARK_CHAT_BASE_URL")
-        or os.environ.get("KIMI_BASE_URL")
-        or os.environ.get("MOONSHOT_BASE_URL")
-        or values.get("GEO_CONTENT_BASE_URL")
-        or values.get("ARK_CHAT_BASE_URL")
-        or values.get("KIMI_BASE_URL")
-        or values.get("MOONSHOT_BASE_URL")
-        or DEFAULT_CONTENT_BASE_URL
-    ).rstrip("/")
+        args.content_temperature = float(temperature) if temperature else DEFAULT_CONTENT_TEMPERATURE
     if not args.dry_run and not args.db_password:
         raise RuntimeError("Missing database password. Set PGPASSWORD or --db-password.")
-    if not args.dry_run and not args.skip_llm and not args.kimi_api_key:
-        raise RuntimeError("Missing content model API key. Set GEO_CONTENT_API_KEY/ARK_CHAT_API_KEY/KIMI_API_KEY or --kimi-api-key.")
+    if not args.dry_run and not args.skip_llm:
+        args.gateway_proxy_url = ops.gateway_proxy_url(args.content_provider)
+    else:
+        args.gateway_proxy_url = ""
     if args.freshness_half_life_days <= 0:
         raise RuntimeError("--freshness-half-life-days must be positive.")
     return args
 
 
 def content_provider_code(args):
-    base_url = (getattr(args, "kimi_base_url", "") or "").lower()
-    model_name = (getattr(args, "kimi_model", "") or "").lower()
-    if "volces.com" in base_url or "doubao" in model_name:
-        return "volcengine_ark_chat"
-    return "kimi_chat"
+    return getattr(args, "content_provider", "volcengine_ark_chat")
 
 
 def content_model_provider(args):
@@ -212,7 +175,7 @@ CREATE TABLE IF NOT EXISTS {asset_table} (
   note_id text NOT NULL REFERENCES public.note_details(note_id) ON DELETE CASCADE,
 
   prompt_version text NOT NULL,
-  model_provider text NOT NULL DEFAULT 'kimi',
+  model_provider text NOT NULL DEFAULT 'volcengine_ark',
   model_name text,
   base_url text,
   analysis_status text NOT NULL DEFAULT 'pending',
@@ -306,7 +269,7 @@ CREATE TABLE IF NOT EXISTS {run_table} (
   run_id bigserial PRIMARY KEY,
   note_id text NOT NULL,
   prompt_version text NOT NULL,
-  model_provider text NOT NULL DEFAULT 'kimi',
+  model_provider text NOT NULL DEFAULT 'volcengine_ark',
   model_name text,
   input_payload jsonb NOT NULL,
   output_text text,
@@ -754,39 +717,36 @@ def parse_model_json(text):
         raise
 
 
-def call_kimi(args, system_prompt, user_prompt):
+def call_content_model(args, system_prompt, user_prompt):
     body = {
-        "model": args.kimi_model,
+        "model": args.content_model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
         "response_format": {"type": "json_object"},
-        "temperature": args.kimi_temperature,
+        "temperature": args.content_temperature,
     }
-    if args.kimi_thinking == "disabled":
+    if args.content_thinking == "disabled":
         body["thinking"] = {"type": "disabled"}
-    headers = {
-        "Authorization": f"Bearer {args.kimi_api_key}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
     last_error = None
     started = time.monotonic()
     for attempt in range(args.retries + 1):
         try:
             response = ops.call_api(
                 "POST",
-                f"{args.kimi_base_url}/chat/completions",
+                args.gateway_proxy_url,
                 provider_code=content_provider_code(args),
                 operation="content_asset_summary",
-                model_name=args.kimi_model,
+                model_name=args.content_model,
                 note_id=getattr(args, "_current_note_id", None),
                 attempt_no=attempt + 1,
                 max_attempts=args.retries + 1,
                 metadata={
                     "prompt_version": getattr(args, "_current_prompt_version", None),
-                    "thinking": args.kimi_thinking,
-                    "temperature": args.kimi_temperature,
+                    "thinking": args.content_thinking,
+                    "temperature": args.content_temperature,
                 },
                 headers=headers,
                 json=body,
@@ -850,7 +810,7 @@ VALUES
                 note_id,
                 args.prompt_version,
                 content_model_provider(args),
-                args.kimi_model,
+                args.content_model,
                 Json(make_jsonable(input_payload)),
                 output_text,
                 Json(make_jsonable(parsed_output or {})),
@@ -871,9 +831,9 @@ def upsert_asset(conn, args, note, image_items, parsed, raw_payload):
     row = {
         "note_id": note["note_id"],
         "prompt_version": args.prompt_version,
-        "model_name": args.kimi_model,
+        "model_name": args.content_model,
         "model_provider": content_model_provider(args),
-        "base_url": args.kimi_base_url,
+        "base_url": args.gateway_proxy_url,
         "analysis_status": "success",
         "analysis_error": None,
         "title": note.get("title"),
@@ -971,9 +931,9 @@ def build_input_payload(note, image_items, args, system_prompt, user_prompt):
     return {
         "note_id": note["note_id"],
         "prompt_version": args.prompt_version,
-        "model_name": args.kimi_model,
+        "model_name": args.content_model,
         "model_provider": content_model_provider(args),
-        "base_url": args.kimi_base_url,
+        "base_url": args.gateway_proxy_url,
         "rank_mode": args.rank_mode,
         "freshness_half_life_days": args.freshness_half_life_days,
         "note": {
@@ -1004,7 +964,7 @@ def process_note(conn, args, note):
     parsed = {}
     latency_ms = None
     try:
-        raw_payload, output_text, parsed, latency_ms = call_kimi(args, system_prompt, user_prompt)
+        raw_payload, output_text, parsed, latency_ms = call_content_model(args, system_prompt, user_prompt)
         asset_id = upsert_asset(conn, args, note, image_items, parsed, raw_payload)
         insert_run(conn, args, note["note_id"], input_payload, output_text, parsed, "success", None, latency_ms, raw_payload)
         return asset_id

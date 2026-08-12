@@ -15,3 +15,9 @@ jobs:
         run: node scripts/check-gateway-contract.mjs .
       - name: Check serverless API syntax
         run: find web/api -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: Install web dependencies
+        run: npm --prefix web ci
+      - name: Run web unit tests
+        run: npm --prefix web test
+      - name: Compile Python workers
+        run: python3 -m compileall -q server/scripts/GEO

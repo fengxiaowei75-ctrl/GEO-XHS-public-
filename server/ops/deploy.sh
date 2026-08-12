@@ -3,8 +3,8 @@ set -euo pipefail
 
 PROJECT_NAME="${1:-}"
 
-if [ "$PROJECT_NAME" != "project-a" ]; then
-  echo "[deploy] this script only handles project-a" >&2
+if [ "$PROJECT_NAME" != "geo-xhs" ]; then
+  echo "[deploy] this script only handles geo-xhs" >&2
   exit 1
 fi
 

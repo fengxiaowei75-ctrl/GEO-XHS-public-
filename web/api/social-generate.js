@@ -1,9 +1,8 @@
 const { Pool } = require("pg");
 const { requireAuth } = require("./_auth");
-const { checkGateway, makeGatewayContext, reportGateway } = require("./_gateway");
+const { makeGatewayContext, proxyProvider } = require("./_gateway");
 
 const PROVIDER_CODE = "volcengine_ark_chat";
-const DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
 const DEFAULT_MODEL = "doubao-seed-2-0-mini-260428";
 const MAX_WORKFLOW_IMAGES = 10;
 const MAX_IMAGE_PROMPT_CHARS = 60000;
@@ -97,13 +96,6 @@ function currentDateText() {
     month: "2-digit",
     day: "2-digit",
   }).format(new Date());
-}
-
-function modelHeaders(apiKey) {
-  return {
-    Authorization: `Bearer ${apiKey}`,
-    "Content-Type": "application/json",
-  };
 }
 
 function extractResponseText(payload) {
@@ -302,8 +294,6 @@ module.exports = async function handler(req, res) {
   const startedMono = Date.now();
   let client = null;
   let gatewayContext = null;
-  let gatewayDecision = null;
-  let gatewayReported = false;
 
   try {
     const user = await requireAuth(req, res, "content");
@@ -311,16 +301,9 @@ module.exports = async function handler(req, res) {
 
     const input = await readJsonBody(req);
     const platform = platformConfigs[input.platform] ? input.platform : "xhs";
-    const apiKey = process.env.GEO_CONTENT_API_KEY || process.env.ARK_CHAT_API_KEY;
-    const baseUrl = cleanText(process.env.GEO_CONTENT_BASE_URL || process.env.ARK_CHAT_BASE_URL || DEFAULT_BASE_URL, 500).replace(/\/$/, "");
     const model = cleanText(process.env.GEO_CONTENT_MODEL || process.env.ARK_CHAT_MODEL || DEFAULT_MODEL, 160);
     const temperature = Number(process.env.GEO_CONTENT_TEMPERATURE || process.env.ARK_CHAT_TEMPERATURE || 0.6);
     const thinking = cleanText(process.env.GEO_CONTENT_THINKING || process.env.ARK_CHAT_THINKING || "disabled", 64);
-
-    if (!apiKey) {
-      sendJson(res, 500, { ok: false, error: "服务端缺少 GEO_CONTENT_API_KEY 或 ARK_CHAT_API_KEY" });
-      return;
-    }
 
     const prompt = buildUserPrompt(input, platform);
     gatewayContext = makeGatewayContext({
@@ -338,23 +321,11 @@ module.exports = async function handler(req, res) {
         note_id: cleanText(input.noteId, 120) || null,
       },
     });
-    try {
-      gatewayDecision = await checkGateway(gatewayContext);
-    } catch (error) {
-      if (error.retryAfterSeconds) res.setHeader("Retry-After", String(error.retryAfterSeconds));
-      sendJson(res, error.statusCode || 503, {
-        ok: false,
-        error: "网关限制：社媒内容生成暂不可用",
-        detail: error.gateway || error.message,
-      });
-      return;
-    }
 
     const dbPool = getPool();
     if (dbPool) client = await dbPool.connect();
     const modelConfig = await lookupModelConfig(client, model);
 
-    const endpoint = new URL(`${baseUrl}/chat/completions`);
     const requestBody = {
       model,
       messages: [
@@ -368,30 +339,39 @@ module.exports = async function handler(req, res) {
     };
     if (thinking === "disabled") requestBody.thinking = { type: "disabled" };
 
-    const modelRes = await fetch(endpoint.toString(), {
-      method: "POST",
-      headers: modelHeaders(apiKey),
-      body: JSON.stringify(requestBody),
-    });
-    const responseText = await modelRes.text();
+    let gatewayResult = null;
+    let modelOk = true;
+    let modelStatus = 200;
+    let payload = {};
+    let responseText = "";
+    try {
+      gatewayResult = await proxyProvider(
+        gatewayContext,
+        "volcengine_ark",
+        "chat_completions",
+        requestBody,
+        { timeoutMs: 120000 },
+      );
+      payload = gatewayResult.data || {};
+      responseText = JSON.stringify(payload);
+    } catch (error) {
+      modelOk = false;
+      modelStatus = error.statusCode || 502;
+      payload = error.payload?.data || error.payload || { error: error.message };
+      responseText = JSON.stringify(payload);
+    }
     const finishedAt = new Date();
     const latencyMs = Date.now() - startedMono;
-    let payload = {};
-    try {
-      payload = responseText ? JSON.parse(responseText) : {};
-    } catch {
-      payload = { raw_text: responseText };
-    }
     const content = sanitizePlainText(extractResponseText(payload));
     const usage = tokenUsage(payload);
     const logWarning = await writeApiLog(client, {
       traceId: `web:social-draft:${Date.now()}`,
       modelConfigId: modelConfig.model_config_id,
       credentialId: modelConfig.credential_id,
-      status: modelRes.ok && content ? "success" : "failed",
-      requestHost: endpoint.host,
-      requestPath: endpoint.pathname,
-      httpStatus: modelRes.status,
+      status: modelOk && content ? "success" : "failed",
+      requestHost: "central-api-gateway",
+      requestPath: "/v1/proxy/volcengine_ark/chat_completions",
+      httpStatus: modelStatus,
       noteId: cleanText(input.noteId, 120),
       startedAt,
       finishedAt,
@@ -401,8 +381,8 @@ module.exports = async function handler(req, res) {
       inputTokens: usage.input_tokens,
       outputTokens: usage.output_tokens,
       totalTokens: usage.total_tokens,
-      errorCode: modelRes.ok ? "" : String(payload?.error?.code || payload?.code || modelRes.status),
-      errorMessage: modelRes.ok ? "" : String(payload?.error?.message || payload?.message || responseText).slice(0, 500),
+      errorCode: modelOk ? "" : String(payload?.error?.code || payload?.code || modelStatus),
+      errorMessage: modelOk ? "" : String(payload?.error?.message || payload?.message || responseText).slice(0, 500),
       rawUsage: usage.raw,
       metadata: {
         source: "web_social_generation_workflow",
@@ -411,31 +391,12 @@ module.exports = async function handler(req, res) {
         model,
         prompt_chars: prompt.length,
         user_id: user.user_id,
-        gateway_request_id: gatewayDecision?.requestId || gatewayContext.requestId,
-        gateway_policy_id: gatewayDecision?.policyId || null,
+        gateway_request_id: gatewayResult?.request_id || gatewayContext.requestId,
       },
     });
 
-    if (!modelRes.ok || !content) {
-      await reportGateway(
-        { ...gatewayContext, ...(gatewayDecision || {}) },
-        {
-          status: "failed",
-          latencyMs,
-          inputTokens: usage.input_tokens,
-          outputTokens: usage.output_tokens,
-          totalTokens: usage.total_tokens,
-          errorCode: String(payload?.error?.code || payload?.code || modelRes.status),
-          errorMessage: String(payload?.error?.message || payload?.message || responseText).slice(0, 500),
-          metadata: {
-            platform,
-            usage: usage.raw,
-            upstream_status: modelRes.status,
-          },
-        },
-      );
-      gatewayReported = true;
-      sendJson(res, modelRes.ok ? 502 : modelRes.status, {
+    if (!modelOk || !content) {
+      sendJson(res, modelOk ? 502 : modelStatus, {
         ok: false,
         error: payload?.error?.message || payload?.message || "社媒内容生成失败",
         detail: payload,
@@ -443,23 +404,6 @@ module.exports = async function handler(req, res) {
       });
       return;
     }
-
-    await reportGateway(
-      { ...gatewayContext, ...(gatewayDecision || {}) },
-      {
-        status: "success",
-        latencyMs,
-        inputTokens: usage.input_tokens,
-        outputTokens: usage.output_tokens,
-        totalTokens: usage.total_tokens,
-        metadata: {
-          platform,
-          usage: usage.raw,
-          content_chars: content.length,
-        },
-      },
-    );
-    gatewayReported = true;
 
     sendJson(res, 200, {
       ok: true,
@@ -474,23 +418,12 @@ module.exports = async function handler(req, res) {
   } catch (error) {
     const finishedAt = new Date();
     const latencyMs = Date.now() - startedMono;
-    if (gatewayContext && !gatewayReported) {
-      await reportGateway(
-        { ...gatewayContext, ...(gatewayDecision || {}) },
-        {
-          status: "failed",
-          latencyMs,
-          errorCode: "request_exception",
-          errorMessage: error.message,
-        },
-      );
-    }
     if (client) {
       await writeApiLog(client, {
         traceId: `web:social-draft:${Date.now()}`,
         status: "failed",
-        requestHost: "ark.cn-beijing.volces.com",
-        requestPath: "/api/v3/chat/completions",
+        requestHost: "central-api-gateway",
+        requestPath: "/v1/proxy/volcengine_ark/chat_completions",
         startedAt,
         finishedAt,
         latencyMs,
@@ -501,8 +434,7 @@ module.exports = async function handler(req, res) {
         rawUsage: {},
         metadata: {
           source: "web_social_generation_workflow",
-          gateway_request_id: gatewayDecision?.requestId || gatewayContext?.requestId || null,
-          gateway_policy_id: gatewayDecision?.policyId || null,
+          gateway_request_id: gatewayContext?.requestId || null,
         },
       });
     }
