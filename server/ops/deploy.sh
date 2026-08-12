@@ -21,6 +21,39 @@ log() {
   printf '[deploy] %s\n' "$*"
 }
 
+sync_gateway_env() {
+  local env_file="${XHS_SYNC_ENV_FILE:-/opt/xhs-sync/sync.env}"
+  local temp_file
+  [ -n "${GATEWAY_BASE_URL:-}" ] || return 0
+  [ -n "${GATEWAY_SERVICE_TOKEN:-}" ] || return 0
+  mkdir -p "$(dirname "$env_file")"
+  touch "$env_file"
+
+  temp_file="$(mktemp)"
+  awk \
+    -v base_url="$GATEWAY_BASE_URL" \
+    -v service_token="$GATEWAY_SERVICE_TOKEN" '
+    BEGIN { base_done = 0; token_done = 0 }
+    /^GATEWAY_BASE_URL=/ {
+      if (!base_done) { print "GATEWAY_BASE_URL=" base_url; base_done = 1 }
+      next
+    }
+    /^GATEWAY_SERVICE_TOKEN=/ {
+      if (!token_done) { print "GATEWAY_SERVICE_TOKEN=" service_token; token_done = 1 }
+      next
+    }
+    /^(ENDATA_TOKEN|DOMI_API_KEY|DUOMI_API_KEY|ARK_API_KEY|ARK_CHAT_API_KEY|GEO_CONTENT_API_KEY|KIMI_API_KEY|COZE_API_TOKEN)=/ { next }
+    { print }
+    END {
+      if (!base_done) print "GATEWAY_BASE_URL=" base_url
+      if (!token_done) print "GATEWAY_SERVICE_TOKEN=" service_token
+    }
+  ' "$env_file" >"$temp_file"
+  install -m 0600 "$temp_file" "$env_file"
+  rm -f "$temp_file"
+  log "central gateway runtime configuration synchronized"
+}
+
 sync_flags_from_path() {
   local path=$1
   case "$path" in
@@ -40,6 +73,8 @@ sync_flags_from_path() {
 RESTART_NOTE=0
 RESTART_VECTOR=0
 RELOAD_SYSTEMD=0
+
+sync_gateway_env
 
 if [ -d "$WEB_DIR" ] && [ -f "$WEB_DIR/package.json" ]; then
   log "clean up leftover preview probes"
