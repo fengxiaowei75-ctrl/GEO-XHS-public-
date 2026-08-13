@@ -13,6 +13,8 @@ jobs:
           node-version: 22
       - name: Check gateway manifest
         run: node scripts/check-gateway-contract.mjs .
+      - name: Check no direct provider usage
+        run: node scripts/check-no-provider-direct.mjs .
       - name: Check serverless API syntax
         run: find web/api -name '*.js' -print0 | xargs -0 -n1 node --check
       - name: Install web dependencies
