@@ -1,0 +1,11 @@
+/opt/xhs-sync/logs/*.log /opt/xhs-sync/logs/*.jsonl {
+    daily
+    rotate 30
+    maxsize 100M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    create 0640 root root
+}

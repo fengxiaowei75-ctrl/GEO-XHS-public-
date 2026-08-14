@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 import psycopg2
 from psycopg2.extras import Json
 import requests
+import geo_observability as observability
 
 
 DEFAULT_ENV_FILE = os.environ.get("XHS_SYNC_ENV_FILE") or (
@@ -464,6 +465,21 @@ WHERE script_run_id = %(script_run_id)s
 def insert_event(script_key=None, message="", level="info", event_type="log", payload=None, script_run_id=None):
     script_key = script_key or _CURRENT_SCRIPT_KEY
     script_run_id = script_run_id if script_run_id is not None else _CURRENT_SCRIPT_RUN_ID
+    unified_status = "failed" if level in ("error", "critical") else ("running" if level == "warning" else "success")
+    unified_severity = level if level in ("debug", "info", "warning", "error", "critical") else "info"
+    try:
+        observability.emit(
+            script_key or "geo-worker",
+            event_type,
+            status=unified_status,
+            severity=unified_severity,
+            run_id=str(script_run_id) if script_run_id is not None else None,
+            operation=event_type,
+            message=message,
+            metadata=payload or {},
+        )
+    except Exception as exc:
+        warn(f"unified observability skipped: {exc}")
     query = """
 INSERT INTO public.geo_ops_script_events (
   script_run_id, script_key, level, event_type, message, payload

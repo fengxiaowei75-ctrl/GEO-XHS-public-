@@ -14,6 +14,7 @@ GEO_SOURCE_DIR="$ROOT_DIR/server/scripts/GEO"
 GEO_RUNTIME_DIR="/opt/xhs-sync/scripts/GEO"
 GEO_LOG_DIR="/opt/xhs-sync/logs"
 SYSTEMD_DIR="/etc/systemd/system"
+LOGROTATE_DIR="/etc/logrotate.d"
 NOTE_SERVICE="xhs-geo-note-ingest-queue.service"
 VECTOR_SERVICE="xhs-geo-asset-vector.service"
 
@@ -57,7 +58,7 @@ sync_gateway_env() {
 sync_flags_from_path() {
   local path=$1
   case "$path" in
-    geo_ops_gateway.py)
+    geo_ops_gateway.py|geo_observability.py)
       RESTART_NOTE=1
       RESTART_VECTOR=1
       ;;
@@ -90,6 +91,12 @@ if [ -d "$WEB_DIR" ] && [ -f "$WEB_DIR/package.json" ]; then
 
   log "build web"
   (cd "$WEB_DIR" && npm run build)
+fi
+
+if [ -f "$ROOT_DIR/server/logrotate/geo-xhs" ]; then
+  log "install GEO log rotation"
+  install -m 0644 "$ROOT_DIR/server/logrotate/geo-xhs" "$LOGROTATE_DIR/geo-xhs"
+  logrotate -d "$LOGROTATE_DIR/geo-xhs" >/dev/null
 fi
 
 if [ -d "$GEO_SOURCE_DIR" ]; then

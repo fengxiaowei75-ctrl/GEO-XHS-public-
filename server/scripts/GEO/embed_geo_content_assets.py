@@ -10,6 +10,7 @@ from pathlib import Path
 import psycopg2
 from psycopg2 import sql
 import geo_ops_gateway as ops
+import geo_observability as observability
 
 
 DEFAULT_ENV_FILE = os.environ.get("XHS_SYNC_ENV_FILE") or (
@@ -302,7 +303,7 @@ def embed_assets(conn, args, specific_asset_ids=None):
     return ok, fail
 
 
-def watch_loop(args):
+def watch_loop(args, script_run_id=None):
     conn = db_connect(args)
     conn.autocommit = True
     try:
@@ -314,6 +315,7 @@ def watch_loop(args):
         ok, fail = embed_assets(conn, args)
         print(f"initial_catchup ok={ok} failed={fail}", flush=True)
         while True:
+            observability.heartbeat("geo-asset-vector", run_id=script_run_id, vector_table=args.vector_table)
             ready = select.select([conn], [], [], args.poll_interval)
             specific_ids = set()
             if ready[0]:
@@ -346,14 +348,30 @@ def main():
         command=sys.argv,
         args=args,
     )
+    observability.emit(
+        "geo-asset-vector",
+        "service_started",
+        status="running",
+        run_id=str(script_run_id) if script_run_id else None,
+        operation="embed_geo_content_assets",
+    )
     if args.watch:
         ops.install_signal_handlers(script_run_id)
         try:
-            watch_loop(args)
+            watch_loop(args, script_run_id)
         except KeyboardInterrupt:
             ops.finish_script_run(script_run_id, status="canceled", exit_code=130)
             return
         except Exception as exc:
+            observability.emit(
+                "geo-asset-vector",
+                "service_failed",
+                status="failed",
+                severity="critical",
+                run_id=str(script_run_id) if script_run_id else None,
+                operation="embed_geo_content_assets",
+                **observability.exception_fields(exc),
+            )
             ops.finish_script_run(
                 script_run_id,
                 status="failed",

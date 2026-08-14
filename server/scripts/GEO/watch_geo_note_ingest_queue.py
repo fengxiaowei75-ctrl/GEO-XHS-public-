@@ -17,6 +17,7 @@ from psycopg2.extras import Json
 
 import build_geo_content_assets as asset_pipeline
 import geo_ops_gateway as ops
+import geo_observability as observability
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -582,7 +583,7 @@ def process_available(conn, args):
     return processed
 
 
-def watch_loop(conn, args):
+def watch_loop(conn, args, script_run_id=None):
     conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute(sql.SQL("LISTEN {};").format(sql.Identifier(args.listen_channel)))
@@ -592,6 +593,7 @@ def watch_loop(conn, args):
         flush=True,
     )
     while True:
+        observability.heartbeat("geo-note-ingest-queue", run_id=script_run_id, queue_table=args.queue_table)
         processed = process_available(conn, args)
         if processed:
             continue
@@ -613,6 +615,13 @@ def main():
         args=args,
         worker_id=args.worker_id,
     )
+    observability.emit(
+        "geo-note-ingest-queue",
+        "service_started",
+        status="running",
+        run_id=str(script_run_id) if script_run_id else None,
+        operation="watch_geo_note_ingest_queue",
+    )
     conn = db_connect(args)
     total = 0
     try:
@@ -628,7 +637,7 @@ def main():
         if args.watch:
             ops.install_signal_handlers(script_run_id)
             try:
-                watch_loop(conn, args)
+                watch_loop(conn, args, script_run_id)
             except KeyboardInterrupt:
                 ops.finish_script_run(script_run_id, status="canceled", exit_code=130, processed_count=total)
                 return
@@ -646,6 +655,15 @@ def main():
                 summary={"processed": total, "queue_table": args.queue_table},
             )
     except Exception as exc:
+        observability.emit(
+            "geo-note-ingest-queue",
+            "service_failed",
+            status="failed",
+            severity="critical",
+            run_id=str(script_run_id) if script_run_id else None,
+            operation="watch_geo_note_ingest_queue",
+            **observability.exception_fields(exc),
+        )
         ops.finish_script_run(
             script_run_id,
             status="failed",
