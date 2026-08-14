@@ -106,7 +106,8 @@ button {
   gap: 6px;
 }
 
-.sidebar nav button {
+.sidebar nav button,
+.sidebar nav a {
   display: flex;
   align-items: center;
   gap: 9px;
@@ -121,7 +122,8 @@ button {
   text-align: left;
 }
 
-.sidebar nav button.active {
+.sidebar nav button.active,
+.sidebar nav a.active {
   border-color: #bfd0f3;
   background: #eef3ff;
   color: var(--blue);

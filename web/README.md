@@ -1,5 +1,7 @@
 # GEO XHS Dashboard
 
+生产环境将 `VITE_GATEWAY_OBSERVABILITY_URL` 配置为中央 Gateway 管理后台地址。侧边栏的“统一运行监控”会在新标签页打开 Gateway，避免在 GEO XHS 内维护重复的运行监控页面。
+
 GEO 小红书内容资产驾驶舱，读取 PostgreSQL 内容资产表和 pgvector 状态，展示队列、Kimi 资产、向量、爆文、人群、漏斗、行业、痛点和视觉资产。
 
 ## Local
