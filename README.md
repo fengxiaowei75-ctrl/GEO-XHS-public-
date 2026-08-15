@@ -29,16 +29,6 @@ docker compose --profile workers up --build
 
 ## Secrets
 
-明文密钥不提交到 GitHub。需要入库备份的环境变量使用 `sops + age` 加密，存放在 `server/secrets/*.enc.env`。
+明文密钥不提交到 GitHub，也不在业务仓库保存加密后的供应商密钥备份。艺恩、火山方舟、Kimi、Duomi 和 Coze 等供应商凭证统一由 Central Gateway 加密保存和轮换。
 
-本机 age 私钥位置：
-
-```bash
-/tmp/geo-xhs/age-keys.txt
-```
-
-解密示例：
-
-```bash
-sops -d server/secrets/sync.enc.env
-```
+GEO 运行环境只持有数据库凭证和 `GATEWAY_SERVICE_TOKEN`，服务器文件为 `/opt/xhs-sync/sync.env`，权限必须保持 `0600 root:root`。Vercel 密钥使用项目 Environment Variables，任何密钥都不能使用 `VITE_` 前缀。

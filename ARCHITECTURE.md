@@ -62,7 +62,7 @@ docs/      可选：数据库字段、内容逻辑、Agent skill、分析文档
   - `xhs-geo-note-ingest-queue.service`
   - `xhs-geo-asset-vector.service`
 
-明文密钥不进入 GitHub。需要入库备份的密钥使用 `sops + age` 加密，例如 `server/secrets/sync.enc.env`。
+明文或加密后的供应商密钥都不进入业务仓库。供应商凭证统一由 Central Gateway 加密保存；GEO 只持有数据库凭证和 Gateway service token。
 
 ## 总原则
 
@@ -184,25 +184,20 @@ server 任务不算完成，除非 GitHub 代码和云服务器实际运行代�
 
 允许改：
 
-- `server/secrets/*.enc.env`
+- Gateway 的供应商凭证管理
 - Vercel Environment Variables
 - 云服务器 `/opt/xhs-sync/sync.env`
 
 不能提交明文密钥文件。
 
-必须检查：
+必须检查 `git status --short --ignored`，确认 `.env`、解密文件和本地密钥未进入 Git。
 
-```bash
-sops -d server/secrets/sync.enc.env | wc -c
-git status --short --ignored
-```
-
-如果生产密钥变化，需要保持这些位置一致：
+如果生产密钥变化，需要更新对应运行环境：
 
 ```text
-云服务器 /opt/xhs-sync/sync.env
-Vercel Environment Variables，如果 web/API 需要
-server/secrets/sync.enc.env 加密备份
+供应商密钥：Central Gateway provider credentials
+GEO 数据库和 Gateway token：云服务器 /opt/xhs-sync/sync.env
+Vercel server-side API 所需密钥：Vercel Environment Variables
 ```
 
 ## 数据库变更协议

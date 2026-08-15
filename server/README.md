@@ -43,24 +43,9 @@ systemctl status xhs-geo-asset-vector.service --no-pager
 /opt/xhs-sync/sync.env
 ```
 
-仓库内只保存加密备份：
+仓库不保存环境文件备份。业务运行环境只保留数据库连接、网关地址、Gateway service token 和非敏感模型参数。供应商凭证统一在 Central Gateway 管理。
 
-```bash
-server/secrets/sync.enc.env
-```
-
-本机解密：
-
-```bash
-sops -d server/secrets/sync.enc.env
-```
-
-恢复到服务器时，不要把明文提交进 GitHub。业务仓库环境只保留数据库连接、网关地址、网关 service token 和非敏感模型参数：
-
-```bash
-sops -d server/secrets/sync.enc.env > /private/tmp/sync.env
-scp /private/tmp/sync.env root@47.94.156.199:/opt/xhs-sync/sync.env
-```
+恢复服务器时，从受控的密钥管理位置重新创建 `/opt/xhs-sync/sync.env`，并设置 `0600 root:root`；不要从 GitHub 恢复密钥。
 
 ## Update Rule
 

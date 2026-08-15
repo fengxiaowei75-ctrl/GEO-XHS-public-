@@ -287,12 +287,11 @@ API 调用模块：
 
 ## 必须先处理的安全债
 
-当前 `server/scripts/GEO` 里有硬编码 token/key 的历史痕迹。后续改造 server 脚本时，必须先移除这些硬编码默认值，统一从：
+当前 `server/scripts/GEO` 里有硬编码 token/key 的历史痕迹。后续改造 server 脚本时，必须先移除这些硬编码默认值，统一通过：
 
-- `/opt/xhs-sync/sync.env`
-- `server/secrets/sync.enc.env`
-- `geo_ops_credentials`
+- GEO 的 `GATEWAY_SERVICE_TOKEN`
+- Central Gateway 的供应商凭证管理
 
-读取密钥。不能再把真实 key 写进脚本。
+访问供应商能力。不能再把真实 key 写进脚本或 GEO 环境。
 
 如果这些 key 已经推送过 GitHub，即使仓库是私有，也建议后续轮换对应 key。
