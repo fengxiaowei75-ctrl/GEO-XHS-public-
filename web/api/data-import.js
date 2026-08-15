@@ -69,7 +69,7 @@ async function importRows(client, rows, batchId) {
         skipped.push({ note_id: row.noteId, reason: "数据库已存在" });
         continue;
       }
-      await client.query(`
+      const inserted = await client.query(`
         INSERT INTO public.note_details (
           note_id, source_file, source_row, source_keyword, source_image, source_title,
           source_author, source_author_profile_url, source_note_type, source_like_count,
@@ -78,6 +78,7 @@ async function importRows(client, rows, batchId) {
           detail_status, detail_error, updated_at
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,'pending',NULL,now())
         ON CONFLICT (note_id) DO NOTHING
+        RETURNING note_id
           source_file=EXCLUDED.source_file, source_row=EXCLUDED.source_row,
           source_keyword=EXCLUDED.source_keyword, source_image=EXCLUDED.source_image,
           source_title=EXCLUDED.source_title, source_author=EXCLUDED.source_author,
@@ -95,6 +96,10 @@ async function importRows(client, rows, batchId) {
         row.sourceAuthor, row.sourceAuthorProfileUrl, row.sourceNoteType, row.sourceLikeCount,
         row.sourceCollectedCount, row.sourceCommentsCount, row.sourceShareCount, row.sourceContent,
         row.sourcePublishTimeText, row.sourceAuthorRegion, row.sourceNoteUrl, JSON.stringify(row.raw)]);
+      if (!inserted.rows[0]) {
+        skipped.push({ note_id: row.noteId, reason: "数据库已存在" });
+        continue;
+      }
       const queued = await client.query(`
         INSERT INTO public.geo_note_ingest_queue (input_value,note_id,source_keyword,priority,status,attempts,max_attempts,last_error,locked_by,locked_at,started_at,finished_at,updated_at)
         VALUES ($1,$2,$3,100,'pending',0,3,NULL,NULL,NULL,NULL,NULL,now())
