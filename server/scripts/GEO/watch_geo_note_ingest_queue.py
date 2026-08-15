@@ -427,6 +427,14 @@ def tail_text(text, max_chars=8000):
     return text[-max_chars:]
 
 
+def classify_child_error(error):
+    """Return a stable class for errors that should not be retried."""
+    message = str(error or "")
+    if "Code=500" in message and "用户不存在" in message:
+        return "permanent_data_error"
+    return "runtime_error"
+
+
 def finish_job(conn, args, job, status, result, error=None):
     queue_schema, queue_name = split_table_name(args.queue_table)
     query = sql.SQL(
@@ -526,6 +534,19 @@ def run_job(conn, args, job):
             )
         else:
             error = tail_text(completed.stderr or completed.stdout, 3000)
+            error_class = classify_child_error(error)
+            if error_class == "permanent_data_error":
+                result["error_class"] = error_class
+                result["retryable"] = False
+                result["reason"] = "艺恩详情接口返回用户不存在，笔记不可继续补全"
+                with conn.cursor() as cur:
+                    cur.execute(
+                        sql.SQL("UPDATE {} SET attempts = max_attempts WHERE queue_id = %(queue_id)s").format(
+                            sql.Identifier(*split_table_name(args.queue_table))
+                        ),
+                        {"queue_id": job["queue_id"]},
+                    )
+                conn.commit()
             finish_job(conn, args, job, "failed", result, error=error)
             ops.insert_event(
                 message="队列任务处理失败",
@@ -537,6 +558,8 @@ def run_job(conn, args, job):
                     "elapsed_ms": elapsed_ms,
                     "returncode": completed.returncode,
                     "error_tail": error,
+                    "error_class": error_class,
+                    "retryable": error_class != "permanent_data_error",
                 },
             )
             print(
