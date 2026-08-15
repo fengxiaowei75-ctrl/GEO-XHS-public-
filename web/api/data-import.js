@@ -56,9 +56,19 @@ function normalizeRow(row, index, batchId) {
 
 async function importRows(client, rows, batchId) {
   const imported = [];
+  const skipped = [];
   await client.query("BEGIN");
   try {
+    const existing = await client.query(
+      "SELECT note_id FROM public.note_details WHERE note_id = ANY($1::text[])",
+      [rows.map((row) => row.noteId)]
+    );
+    const existingIds = new Set(existing.rows.map((item) => item.note_id));
     for (const row of rows) {
+      if (existingIds.has(row.noteId)) {
+        skipped.push({ note_id: row.noteId, reason: "数据库已存在" });
+        continue;
+      }
       await client.query(`
         INSERT INTO public.note_details (
           note_id, source_file, source_row, source_keyword, source_image, source_title,
@@ -67,7 +77,7 @@ async function importRows(client, rows, batchId) {
           source_publish_time_text, source_author_region, source_note_url, source_raw_json,
           detail_status, detail_error, updated_at
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,'pending',NULL,now())
-        ON CONFLICT (note_id) DO UPDATE SET
+        ON CONFLICT (note_id) DO NOTHING
           source_file=EXCLUDED.source_file, source_row=EXCLUDED.source_row,
           source_keyword=EXCLUDED.source_keyword, source_image=EXCLUDED.source_image,
           source_title=EXCLUDED.source_title, source_author=EXCLUDED.source_author,
@@ -88,17 +98,14 @@ async function importRows(client, rows, batchId) {
       const queued = await client.query(`
         INSERT INTO public.geo_note_ingest_queue (input_value,note_id,source_keyword,priority,status,attempts,max_attempts,last_error,locked_by,locked_at,started_at,finished_at,updated_at)
         VALUES ($1,$2,$3,100,'pending',0,3,NULL,NULL,NULL,NULL,NULL,now())
-        ON CONFLICT (note_id) DO UPDATE SET
-          input_value=EXCLUDED.input_value, source_keyword=EXCLUDED.source_keyword,
-          status=CASE WHEN geo_note_ingest_queue.status='running' THEN 'running' ELSE 'pending' END,
-          attempts=CASE WHEN geo_note_ingest_queue.status='running' THEN geo_note_ingest_queue.attempts ELSE 0 END,
-          last_error=NULL, finished_at=NULL, updated_at=now()
+        ON CONFLICT (note_id) DO NOTHING
         RETURNING queue_id,status
       `, [row.sourceNoteUrl || row.noteId, row.noteId, batchId]);
-      imported.push({ note_id: row.noteId, queue_id: Number(queued.rows[0].queue_id), status: queued.rows[0].status });
+      if (queued.rows[0]) imported.push({ note_id: row.noteId, queue_id: Number(queued.rows[0].queue_id), status: queued.rows[0].status });
+      else skipped.push({ note_id: row.noteId, reason: "队列中已存在" });
     }
     await client.query("COMMIT");
-    return imported;
+    return { imported, skipped };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -143,8 +150,15 @@ module.exports = async function handler(req, res) {
     const normalized = payload.rows.map((row, index) => normalizeRow(row, index, batchId));
     const duplicateIds = normalized.filter((row, index) => normalized.findIndex((item) => item.noteId === row.noteId) !== index).map((row) => row.noteId);
     if (duplicateIds.length) throw Object.assign(new Error(`文件内存在重复笔记ID：${[...new Set(duplicateIds)].slice(0, 5).join("、")}`), { statusCode: 400 });
-    const imported = await withAuthClient((client) => importRows(client, normalized, batchId));
-    sendJson(res, 201, { ok: true, batch_id: batchId, imported_count: imported.length, items: imported });
+    const result = await withAuthClient((client) => importRows(client, normalized, batchId));
+    sendJson(res, 201, {
+      ok: true,
+      batch_id: batchId,
+      imported_count: result.imported.length,
+      skipped_count: result.skipped.length,
+      items: result.imported,
+      skipped: result.skipped,
+    });
   } catch (error) {
     sendJson(res, error.statusCode || 500, { ok: false, error: error.message || "原始数据导入失败" });
   }

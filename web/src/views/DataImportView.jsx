@@ -132,7 +132,7 @@ export function DataImportView({ onRefresh }) {
             {[["必须", "笔记ID / 笔记链接"], ["可选", "标题、内容、作者、图片"], ["可选", "点赞、收藏、评论、分享"], ["自动", "详情、LLM、图片和向量字段"]].map(([type, label]) => <div key={label}><b>{type}</b><span>{label}</span></div>)}
           </div>
           {parseError ? <div className="import-message error"><AlertCircle size={16} />{parseError}</div> : null}
-          {result ? <div className="import-message success"><CheckCircle2 size={16} />已导入 {result.imported_count} 条，批次 {result.batch_id}</div> : null}
+          {result ? <div className="import-message success"><CheckCircle2 size={16} />新增 {result.imported_count} 条，已跳过重复笔记 {result.skipped_count || 0} 条，批次 {result.batch_id}</div> : null}
           <button className="primary-button import-submit" disabled={!validRows.length || invalidCount > 0 || uploading} onClick={submit} type="button">
             {uploading ? "正在写入队列..." : `确认导入 ${validRows.length || 0} 条`}
           </button>
