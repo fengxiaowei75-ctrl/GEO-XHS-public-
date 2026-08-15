@@ -16,6 +16,8 @@ GEO_LOG_DIR="/opt/xhs-sync/logs"
 SYSTEMD_DIR="/etc/systemd/system"
 LOGROTATE_DIR="/etc/logrotate.d"
 NOTE_SERVICE="xhs-geo-note-ingest-queue.service"
+NOTE_SERVICE_2="xhs-geo-note-ingest-queue-worker-2.service"
+NOTE_SERVICE_3="xhs-geo-note-ingest-queue-worker-3.service"
 VECTOR_SERVICE="xhs-geo-asset-vector.service"
 
 log() {
@@ -132,7 +134,7 @@ if [ -d "$ROOT_DIR/server/systemd" ]; then
       install -m 0644 "$unit" "$dest"
       RELOAD_SYSTEMD=1
       case "$(basename "$unit")" in
-        "$NOTE_SERVICE")
+        "$NOTE_SERVICE"|"$NOTE_SERVICE_2"|"$NOTE_SERVICE_3")
           RESTART_NOTE=1
           ;;
         "$VECTOR_SERVICE")
@@ -154,13 +156,16 @@ if [ "$RESTART_VECTOR" -eq 1 ]; then
 fi
 
 if [ "$RESTART_NOTE" -eq 1 ]; then
-  log "restart $NOTE_SERVICE"
-  systemctl restart "$NOTE_SERVICE"
+  for service in "$NOTE_SERVICE" "$NOTE_SERVICE_2" "$NOTE_SERVICE_3"; do
+    log "enable and restart $service"
+    systemctl enable "$service"
+    systemctl restart "$service"
+  done
 fi
 
 if [ "$RESTART_VECTOR" -eq 1 ] || [ "$RESTART_NOTE" -eq 1 ]; then
   systemctl status "$VECTOR_SERVICE" --no-pager -l || true
-  systemctl status "$NOTE_SERVICE" --no-pager -l || true
+  systemctl status "$NOTE_SERVICE" "$NOTE_SERVICE_2" "$NOTE_SERVICE_3" --no-pager -l || true
 else
   log "no GEO service restart required"
 fi
