@@ -19,6 +19,7 @@ const ContentInsightView = lazyNamedView(() => import("./views/ContentInsightVie
 const ImageGenView = lazyNamedView(() => import("./views/ImageGenView"), "ImageGenView");
 const FixedContentView = lazyNamedView(() => import("./views/FixedContentView"), "FixedContentView");
 const DraftReviewView = lazyNamedView(() => import("./views/DraftReviewView"), "DraftReviewView");
+const DataImportView = lazyNamedView(() => import("./views/DataImportView"), "DataImportView");
 const OpsView = lazyNamedView(() => import("./views/OpsView"), "OpsView");
 const ModelsView = lazyNamedView(() => import("./views/ModelsView"), "ModelsView");
 const AdminView = lazyNamedView(() => import("./views/AdminView"), "AdminView");
@@ -28,6 +29,7 @@ const viewMap = {
   imageGen: ImageGenView,
   fixedContent: FixedContentView,
   draftReview: DraftReviewView,
+  dataImport: DataImportView,
   ops: OpsView,
   models: ModelsView,
   admin: AdminView,

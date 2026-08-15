@@ -19,6 +19,12 @@
       "cost_class": "db_read"
     },
     {
+      "feature_key": "raw_data_import",
+      "display_name": "原始数据导入",
+      "description": "上传原始笔记数据并进入后台逐条处理队列",
+      "cost_class": "db_write"
+    },
+    {
       "feature_key": "account_admin",
       "display_name": "账号管理",
       "description": "管理员创建、更新和禁用 dashboard 账号",
@@ -133,6 +139,30 @@
       "high_cost": false,
       "default_policy_key": "dashboard_read_standard",
       "description": "读取 dashboard 内容、运维和模型配置数据"
+    },
+    {
+      "endpoint_key": "GET /api/data-import",
+      "method": "GET",
+      "path": "/api/data-import",
+      "source_file": "web/api/data-import.js",
+      "feature_key": "raw_data_import",
+      "auth_required": "user",
+      "cost_class": "db_read",
+      "high_cost": false,
+      "default_policy_key": "raw_data_import_read_standard",
+      "description": "读取最近原始数据导入批次状态"
+    },
+    {
+      "endpoint_key": "POST /api/data-import",
+      "method": "POST",
+      "path": "/api/data-import",
+      "source_file": "web/api/data-import.js",
+      "feature_key": "raw_data_import",
+      "auth_required": "user",
+      "cost_class": "db_write",
+      "high_cost": false,
+      "default_policy_key": "raw_data_import_write_strict",
+      "description": "写入原始笔记数据并加入处理队列"
     },
     {
       "endpoint_key": "GET /api/admin/users",

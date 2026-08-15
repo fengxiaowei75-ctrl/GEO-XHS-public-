@@ -12,6 +12,7 @@
     "@cp949/react-wordcloud": "^1.0.1",
     "@isdk/nlp-jieba": "^2.2.2",
     "@vitejs/plugin-react": "^6.0.5",
+    "fflate": "^0.8.2",
     "lucide-react": "^1.30.0",
     "pg": "^8.22.0",
     "react": "^19.2.8",
