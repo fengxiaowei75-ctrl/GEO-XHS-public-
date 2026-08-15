@@ -79,19 +79,6 @@ async function importRows(client, rows, batchId) {
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,'pending',NULL,now())
         ON CONFLICT (note_id) DO NOTHING
         RETURNING note_id
-          source_file=EXCLUDED.source_file, source_row=EXCLUDED.source_row,
-          source_keyword=EXCLUDED.source_keyword, source_image=EXCLUDED.source_image,
-          source_title=EXCLUDED.source_title, source_author=EXCLUDED.source_author,
-          source_author_profile_url=EXCLUDED.source_author_profile_url,
-          source_note_type=EXCLUDED.source_note_type, source_like_count=EXCLUDED.source_like_count,
-          source_collected_count=EXCLUDED.source_collected_count,
-          source_comments_count=EXCLUDED.source_comments_count,
-          source_share_count=EXCLUDED.source_share_count, source_content=EXCLUDED.source_content,
-          source_publish_time_text=EXCLUDED.source_publish_time_text,
-          source_author_region=EXCLUDED.source_author_region,
-          source_note_url=EXCLUDED.source_note_url, source_raw_json=EXCLUDED.source_raw_json,
-          detail_status=CASE WHEN note_details.detail_status='success' THEN note_details.detail_status ELSE 'pending' END,
-          detail_error=NULL, updated_at=now()
       `, [row.noteId, row.sourceFile, row.sourceRow, row.sourceKeyword, row.sourceImage, row.sourceTitle,
         row.sourceAuthor, row.sourceAuthorProfileUrl, row.sourceNoteType, row.sourceLikeCount,
         row.sourceCollectedCount, row.sourceCommentsCount, row.sourceShareCount, row.sourceContent,
